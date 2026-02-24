@@ -1,13 +1,16 @@
 import express from 'express';
 import cors from 'cors';
-
+import cookieParser from 'cookie-parser';
+import authRoutes from './routes/authRoutes.js';
 
 const app = express();
-
-app.use(cors({ origin: true, credentials: true }));
+const FrontendURL = process.env.FRONTEND_URL ;
+app.use(cors({ origin: FrontendURL, credentials: true }));
 app.use(express.json());
+app.use(cookieParser());
 
+app.use('/api/auth', authRoutes);
 app.get('/', (req, res) => {
-    res.send('Hello World!');
+    res.json({ message: "Welcome to Lough Backend API!" });
 });
 export default app;
