@@ -28,7 +28,7 @@ const UserSchema = new mongoose.Schema(
   },
   { timestamps: true } 
 );
-UserSchema.index({ email: 1 }, { unique: true });
+
 UserSchema.index({ role: 1 });
 UserSchema.index({ isActive: 1 });
 const User = mongoose.model('User', UserSchema);
