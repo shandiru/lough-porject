@@ -84,7 +84,7 @@ export const loginUser = async (req, res) => {
     res.cookie('refreshToken', refreshToken, {
       httpOnly: true,
       secure: true,
-      sameSite: 'none', 
+      sameSite: 'none',
       maxAge: 7 * 24 * 60 * 60 * 1000,
       path: '/'
     });
@@ -107,7 +107,8 @@ export const refreshToken = async (req, res) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_REFRESHTOEKEN_KEY);
-    const user = await User.findById(decoded.id);
+    const user = await User.findOne({ _id: decoded.id, isActive: true});
+
     if (!user) return res.status(403).json({ message: "User not found" });
 
     const newAccessToken = generateAccessToken(user);
@@ -118,7 +119,7 @@ export const refreshToken = async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Refresh Token Error:", err); 
+    console.error("Refresh Token Error:", err);
     return res.status(403).json({ message: "Invalid refresh token" });
   }
 };
@@ -129,9 +130,9 @@ export const logoutUser = async (req, res) => {
     httpOnly: true,
     secure: true,
     sameSite: 'none',
-    path: '/'  
+    path: '/'
   });
- 
+
   res.status(200).json({ message: "Logged out successfully" });
 };
 
