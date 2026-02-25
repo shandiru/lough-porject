@@ -4,6 +4,7 @@ import cookieParser from 'cookie-parser';
 import authRoutes from './routes/authRoutes.js';
 import categoryRouter from './routes/categoryRoutes.js';
 import serviceRouter from './routes/serviceRoutes.js'
+import staffRouter from './routes/staffroutes.js';
 const app = express();
 const FrontendURL = process.env.FRONTEND_URL ;
 app.use(cors({ origin: true, credentials: true }));
@@ -13,6 +14,7 @@ app.use(cookieParser());
 app.use('/api/auth', authRoutes);
 app.use('/api/categories', categoryRouter);
 app.use('/api/services', serviceRouter);
+app.use('/api/staff', staffRouter);
 app.get('/', (req, res) => {
     res.json({ message: "Welcome to Lough Backend API!" });
 });
