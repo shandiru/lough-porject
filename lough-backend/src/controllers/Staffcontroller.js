@@ -225,3 +225,26 @@ export const deleteStaff = async (req, res) => {
     res.status(500).json({ message: 'Error deleting staff', error: err.message });
   }
 };
+
+
+export const getGoogleCalenderStatus = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const staff = await Staff.findOne({ userId });
+
+    if (!staff) {
+      return res.status(404).json(false);
+    }
+
+    const isConnected =
+      !!staff.googleCalendarId &&
+      staff.googleCalendarSyncStatus?.status === 'connected';
+
+    return res.status(200).json(isConnected);
+
+  } catch (error) {
+    console.error('Google Calendar Status Error:', error);
+    return res.status(500).json(false);
+  }
+};

@@ -7,11 +7,12 @@ import {
   toggleStaffActive,
   resendInvite,
   deleteStaff,
+  getGoogleCalenderStatus
 } from '../controllers/Staffcontroller.js';
-import { verifyToken, verifyAdmin } from '../middleware/verifyToken.js';
+import { verifyToken, verifyAdmin ,verifyStaff } from '../middleware/verifyToken.js';
 
 const staffRouter = express.Router();
-
+staffRouter.get('/getGoogleCalenderStatus', verifyToken, verifyStaff,getGoogleCalenderStatus);
 staffRouter.get('/',                     verifyToken, verifyAdmin, getAllStaff);
 staffRouter.get('/:id',                  verifyToken, verifyAdmin, getStaffById);
 staffRouter.post('/',                    verifyToken, verifyAdmin, createStaff);

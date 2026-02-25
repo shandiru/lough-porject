@@ -28,3 +28,13 @@ export const verifyAdmin = (req, res, next) => {
   }
   next();
 };
+
+
+
+export const verifyStaff = (req, res, next) => {
+  console.log( req.user.role );
+  if (!req.user || req.user.role !== 'staff') {
+    return res.status(403).json({ message: 'staff access required' });
+  }
+  next();
+};

@@ -71,7 +71,6 @@ const staffSchema = new mongoose.Schema(
 );
 
 
-staffSchema.index({ userId: 1 }, { unique: true });
 staffSchema.index({ isOnLeave: 1 });
 staffSchema.index({ skills: 1 }); 
 
