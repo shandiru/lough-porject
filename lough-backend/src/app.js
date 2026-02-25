@@ -5,7 +5,7 @@ import authRoutes from './routes/authRoutes.js';
 
 const app = express();
 const FrontendURL = process.env.FRONTEND_URL ;
-app.use(cors({ origin: FrontendURL, credentials: true }));
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
 

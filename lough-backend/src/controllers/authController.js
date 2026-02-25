@@ -131,7 +131,7 @@ export const logoutUser = async (req, res) => {
     sameSite: 'none',
     path: '/'  
   });
-  console.log("Refresh token cookie cleared");
+ 
   res.status(200).json({ message: "Logged out successfully" });
 };
 
