@@ -30,7 +30,8 @@ const CategorySchema = new mongoose.Schema(
   }
 );
 
-
+CategorySchema.index({ name: 1 }, { unique: true });
+CategorySchema.index({ isActive: 1, displayOrder: 1 });
 const Category = mongoose.model('Category', CategorySchema);
 
 export default Category;
