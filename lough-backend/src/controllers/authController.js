@@ -200,21 +200,21 @@ export const loginUser = async (req, res) => {
 };
 export const refreshToken = async (req, res) => {
   const token = req.cookies.refreshToken;
- 
+
   if (!token) return res.status(401).json({
     message: "No refresh token"
   });
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_REFRESHTOEKEN_KEY);
-    
+
     const user = await User.findOne({
       _id: decoded.id,
       isActive: true
     });
-     if(!user){
-      
-     }
+    if (!user) {
+
+    }
     if (!user) return res.status(403).json({
       message: "User not found"
     });
@@ -277,16 +277,51 @@ export const resetPassword = async (req, res) => {
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
+        user: config.email.user,
+        pass: config.email.pass
       }
     });
 
-    const link = `${process.env.CLIENT_URL}/reset-password?token=${token}&email=${email}`;
+    const link = `${config.clientUrl}/reset-password?token=${token}&email=${email}`;
     await transporter.sendMail({
       to: email,
-      subject: "Reset Your Password",
-      html: `<p>Click <a href="${link}">here</a> to reset your password. Expire in 5 mins.</p>`
+      subject: "Reset Your Password - Lough Skin",
+      html: `
+  <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 500px; margin: auto; padding: 30px; background-color: #F5EDE4; border-radius: 20px; border: 1px solid #e0d5c8;">
+    
+    <h2 style="color: #22B8C8; margin-bottom: 10px; text-align: center;">Lough Skin </h2>
+    
+    <div style="background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+      <p style="color: #444; font-size: 16px; line-height: 1.6;">
+        Hello,
+      </p>
+      
+      <p style="color: #555; font-size: 15px; line-height: 1.6;">
+        We received a request to reset the password for your <strong>Lough Skin </strong> account. No changes have been made yet.
+      </p>
+
+      <div style="text-align: center; margin: 30px 0;">
+        <a href="${link}" style="display: inline-block; background: #22B8C8; color: white; padding: 15px 30px; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 16px;">
+          Reset My Password
+        </a>
+      </div>
+
+      <div style="background: #fff3cd; padding: 12px; border-radius: 6px; text-align: center;">
+        <p style="color: #856404; font-size: 14px; margin: 0;">
+          <strong>Security Notice:</strong> This link is valid for <strong>5 minutes</strong> only.
+        </p>
+      </div>
+      
+      <p style="color: #777; font-size: 13px; margin-top: 20px; line-height: 1.5;">
+        If you didn't request this, you can safely ignore this email. Your password will remain unchanged.
+      </p>
+    </div>
+
+    <p style="color: #999; font-size: 12px; margin-top: 25px; text-align: center; line-height: 1.4;">
+      &copy; 2026 Lough Skin. Secure Admin Access.
+    </p>
+  </div>
+`,
     });
 
     res.status(200).json({
