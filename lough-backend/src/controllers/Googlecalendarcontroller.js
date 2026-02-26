@@ -1,7 +1,7 @@
 import { google } from 'googleapis';
 import Staff from '../models/staff.js';
 
-// ─── Build OAuth2 client ──────────────────────────────────────────────────────
+
 const getOAuth2Client = () =>
   new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -9,15 +9,13 @@ const getOAuth2Client = () =>
     "http://localhost:5000/api/google/callback"
   );
 
-// ────────────────────────────────────────────────────────────────────────────
-// GET /api/google/auth-url
-// Staff clicks "Connect" → frontend calls this → gets URL → redirects browser to Google
-// ────────────────────────────────────────────────────────────────────────────
+
+
 export const getAuthUrl = (req, res) => {
   try {
     const oauth2Client = getOAuth2Client();
 
-    // Embed logged-in user's ID in state so callback knows who to save tokens for
+
     const state = Buffer.from(JSON.stringify({ userId: req.user.id })).toString('base64');
 
     const url = oauth2Client.generateAuthUrl({
@@ -36,11 +34,6 @@ export const getAuthUrl = (req, res) => {
   }
 };
 
-// ────────────────────────────────────────────────────────────────────────────
-// GET /api/google/callback?code=...&state=...
-// Google redirects here after staff approves → exchange code for tokens → save to Staff DB
-// NO verifyToken here — Google calls this, not the app
-// ────────────────────────────────────────────────────────────────────────────
 export const handleCallback = async (req, res) => {
   const { code, state, error } = req.query;
 
@@ -102,60 +95,4 @@ export const handleCallback = async (req, res) => {
   }
 };
 
-// ────────────────────────────────────────────────────────────────────────────
-// DELETE /api/google/disconnect
-// Clears Google Calendar tokens from Staff document + revokes with Google
-// ────────────────────────────────────────────────────────────────────────────
-export const disconnectCalendar = async (req, res) => {
-  try {
-    const staff = await Staff.findOne({ userId: req.user.id });
-    if (!staff) return res.status(404).json({ message: 'Staff profile not found' });
 
-    // Best-effort revoke with Google
-    if (staff.googleCalendarToken?.access_token) {
-      try {
-        const oauth2Client = getOAuth2Client();
-        await oauth2Client.revokeToken(staff.googleCalendarToken.access_token);
-      } catch {
-        // Silently ignore — we still clear from DB
-      }
-    }
-
-    // Clear all Google data
-    staff.googleCalendarToken     = undefined;
-    staff.googleCalendarId        = undefined;
-    staff.googleCalendarSyncStatus = {
-      lastSync:     new Date(),
-      status:       'disconnected',
-      errorMessage: '',
-    };
-
-    await staff.save();
-
-    res.status(200).json({ message: 'Google Calendar disconnected' });
-  } catch (err) {
-    res.status(500).json({ message: 'Error disconnecting', error: err.message });
-  }
-};
-
-// ────────────────────────────────────────────────────────────────────────────
-// UTILITY — import in booking controller to create calendar events
-// ────────────────────────────────────────────────────────────────────────────
-export const getAuthClientForStaff = async (staffId) => {
-  const staff = await Staff.findById(staffId);
-  if (!staff?.googleCalendarToken?.access_token) return null;
-
-  const oauth2Client = getOAuth2Client();
-  oauth2Client.setCredentials(staff.googleCalendarToken);
-
-  oauth2Client.on('tokens', async (newTokens) => {
-    if (newTokens.access_token) {
-      staff.googleCalendarToken.access_token = newTokens.access_token;
-      if (newTokens.expiry_date) staff.googleCalendarToken.expiry_date = newTokens.expiry_date;
-      staff.googleCalendarSyncStatus.lastSync = new Date();
-      await staff.save();
-    }
-  });
-
-  return oauth2Client;
-};
