@@ -3,27 +3,53 @@ import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { generateAccessToken, generateRefreshToken } from '../utils/tokenUtils.js';
+import config from '../config/index.js';
+import {
+  generateAccessToken,
+  generateRefreshToken
+} from '../utils/tokenUtils.js';
 
 
 export const inviteUser = async (req, res) => {
-  const { firstName, lastName, email, phone, gender, role, adminKey } = req.body;
-  const adminSecretKey = process.env.ADMIN_SECRET_KEY;
+  const {
+    firstName,
+    lastName,
+    email,
+    phone,
+    gender,
+    role,
+    adminKey
+  } = req.body;
+
   try {
-    if (adminKey !== adminSecretKey) {
-      return res.status(401).json({ message: "Incorrect Admin Secret Key!" });
+    if (adminKey !== config.adminSecretKey) {
+      return res.status(401).json({
+        message: "Incorrect Admin Secret Key!"
+      });
     }
 
     const token = crypto.randomBytes(32).toString('hex');
     const expires = Date.now() + 5 * 60 * 1000;
-    const userExists = await User.findOne({ email });
+    const userExists = await User.findOne({
+      email
+    });
     if (userExists && userExists.isActive) {
-      return res.status(400).json({ message: "User already exists!" });
+      return res.status(400).json({
+        message: "User already exists!"
+      });
     } else {
-      await User.deleteOne({ email, isActive: false });
+      await User.deleteOne({
+        email,
+        isActive: false
+      });
     }
     const newUser = new User({
-      firstName, lastName, email, phone, gender, role,
+      firstName,
+      lastName,
+      email,
+      phone,
+      gender,
+      role,
       emailVerifyToken: token,
       emailVerifyTokenExpire: expires,
       password: await bcrypt.hash(crypto.randomBytes(8).toString('hex'), 10),
@@ -34,29 +60,80 @@ export const inviteUser = async (req, res) => {
 
     const transporter = nodemailer.createTransport({
       service: 'gmail',
-      auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+      auth: {
+        user: config.email.user,
+        pass: config.email.pass
+      }
     });
 
-    const link = `${process.env.CLIENT_URL}/setup-password?token=${token}&email=${email}`;
+    const link = `${config.clientUrl}/setup-password?token=${token}&email=${email}`;
     await transporter.sendMail({
       to: email,
       subject: "Verify Your Account",
-      html: `<p>Click <a href="${link}">here</a> to set password. Expire in 5 mins.</p>`
+      html: `
+  <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 500px; margin: auto; padding: 30px; background-color: #F5EDE4; border-radius: 20px; border: 1px solid #e0d5c8;">
+    
+    <h2 style="color: #22B8C8; margin-bottom: 10px; text-align: center;">Lough Skin Admin Portal</h2>
+    
+    <div style="background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+      <p style="color: #444; font-size: 16px; line-height: 1.6;">
+        Hi <strong>${firstName}</strong>,
+      </p>
+      
+      <p style="color: #555; font-size: 15px; line-height: 1.6;">
+        You have been invited to join the <strong>Lough Skin Management Team</strong> as an Admin. 
+        To access your dashboard, you need to set up your secure password first.
+      </p>
+
+      <div style="text-align: center; margin: 30px 0;">
+        <a href="${link}" style="display: inline-block; background: #22B8C8; color: white; padding: 15px 30px; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 16px; transition: background 0.3s;">
+          Setup Admin Account
+        </a>
+      </div>
+
+      <p style="color: #666; font-size: 14px; background: #fff3cd; padding: 10px; border-radius: 6px; text-align: center;">
+        <strong>Security Note:</strong> This invite link is private and will expire in <strong>5 minutes</strong>.
+      </p>
+    </div>
+
+    <p style="color: #999; font-size: 12px; margin-top: 25px; text-align: center; line-height: 1.4;">
+      If you were not expecting this invitation, please contact the main administrator or ignore this email.
+      <br> &copy; 2026 Lough Skin. All rights reserved.
+    </p>
+  </div>
+`,
     });
 
-    res.status(200).json({ message: "Invite link sent!" });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+    res.status(200).json({
+      message: "Invite link sent!"
+    });
+  } catch (err) {
+    res.status(500).json({
+      message: err.message
+    });
+  }
 };
 
 
 export const verifyAndSetup = async (req, res) => {
-  const { token, email, password } = req.body;
+  const {
+    token,
+    email,
+    password
+  } = req.body;
   try {
     const user = await User.findOne({
-      email, emailVerifyToken: token, emailVerifyTokenExpire: { $gt: Date.now() }, isActive: false
+      email,
+      emailVerifyToken: token,
+      emailVerifyTokenExpire: {
+        $gt: Date.now()
+      },
+      isActive: false
     });
 
-    if (!user) return res.status(400).json({ message: "Link expired or invalid!" });
+    if (!user) return res.status(400).json({
+      message: "Link expired or invalid!"
+    });
 
     user.password = await bcrypt.hash(password, await bcrypt.genSalt(10));
     user.isActive = true;
@@ -64,17 +141,31 @@ export const verifyAndSetup = async (req, res) => {
     user.emailVerifyTokenExpire = undefined;
     await user.save();
 
-    res.status(200).json({ message: "Verified! You can login now." });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+    res.status(200).json({
+      message: "Verified! You can login now."
+    });
+  } catch (err) {
+    res.status(500).json({
+      message: err.message
+    });
+  }
 };
 
 
 export const loginUser = async (req, res) => {
-  const { email, password } = req.body;
+  const {
+    email,
+    password
+  } = req.body;
   try {
-    const user = await User.findOne({ email, isActive: true });
+    const user = await User.findOne({
+      email,
+      isActive: true
+    });
     if (!user || !(await bcrypt.compare(password, user.password))) {
-      return res.status(400).json({ message: "Invalid credentials or account not active!" });
+      return res.status(400).json({
+        message: "Invalid credentials or account not active!"
+      });
     }
 
     const accessToken = generateAccessToken(user);
@@ -95,32 +186,54 @@ export const loginUser = async (req, res) => {
     res.status(200).json({
       message: "Login successful!",
       accessToken,
-      user: { name: user.firstName, role: user.role }
+      user: {
+        name: user.firstName,
+        role: user.role
+      }
     });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) {
+    res.status(500).json({
+      message: err.message
+    });
+  }
 
 };
 export const refreshToken = async (req, res) => {
   const token = req.cookies.refreshToken;
-
-  if (!token) return res.status(401).json({ message: "No refresh token" });
+  console.log(token);
+  if (!token) return res.status(401).json({
+    message: "No refresh token"
+  });
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_REFRESHTOEKEN_KEY);
-    const user = await User.findOne({ _id: decoded.id, isActive: true});
-
-    if (!user) return res.status(403).json({ message: "User not found" });
+    
+    const user = await User.findOne({
+      _id: decoded.id,
+      isActive: true
+    });
+     if(!user){
+      
+     }
+    if (!user) return res.status(403).json({
+      message: "User not found"
+    });
 
     const newAccessToken = generateAccessToken(user);
 
     res.status(200).json({
       accessToken: newAccessToken,
-      user: { name: user.firstName, role: user.role }
+      user: {
+        name: user.firstName,
+        role: user.role
+      }
     });
 
   } catch (err) {
     console.error("Refresh Token Error:", err);
-    return res.status(403).json({ message: "Invalid refresh token" });
+    return res.status(403).json({
+      message: "Invalid refresh token"
+    });
   }
 };
 
@@ -133,7 +246,9 @@ export const logoutUser = async (req, res) => {
     path: '/'
   });
 
-  res.status(200).json({ message: "Logged out successfully" });
+  res.status(200).json({
+    message: "Logged out successfully"
+  });
 };
 
 
@@ -141,10 +256,17 @@ export const logoutUser = async (req, res) => {
 
 
 export const resetPassword = async (req, res) => {
-  const { email } = req.body;
+  const {
+    email
+  } = req.body;
   try {
-    const user = await User.findOne({ email, isActive: true });
-    if (!user) return res.status(400).json({ message: "User not found or inactive!" });
+    const user = await User.findOne({
+      email,
+      isActive: true
+    });
+    if (!user) return res.status(400).json({
+      message: "User not found or inactive!"
+    });
 
     const token = crypto.randomBytes(32).toString('hex');
     const expires = Date.now() + 5 * 60 * 1000;
@@ -154,7 +276,10 @@ export const resetPassword = async (req, res) => {
 
     const transporter = nodemailer.createTransport({
       service: 'gmail',
-      auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+      }
     });
 
     const link = `${process.env.CLIENT_URL}/reset-password?token=${token}&email=${email}`;
@@ -164,24 +289,46 @@ export const resetPassword = async (req, res) => {
       html: `<p>Click <a href="${link}">here</a> to reset your password. Expire in 5 mins.</p>`
     });
 
-    res.status(200).json({ message: "Password reset link sent!" });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+    res.status(200).json({
+      message: "Password reset link sent!"
+    });
+  } catch (err) {
+    res.status(500).json({
+      message: err.message
+    });
+  }
 };
 
 export const resetPasswordConfirm = async (req, res) => {
-  const { token, email, newPassword } = req.body;
+  const {
+    token,
+    email,
+    newPassword
+  } = req.body;
   try {
     const user = await User.findOne({
-      email, emailVerifyToken: token, emailVerifyTokenExpire: { $gt: Date.now() }, isActive: true
+      email,
+      emailVerifyToken: token,
+      emailVerifyTokenExpire: {
+        $gt: Date.now()
+      },
+      isActive: true
     });
-    if (!user) return res.status(400).json({ message: "Invalid or expired token!" });
+    if (!user) return res.status(400).json({
+      message: "Invalid or expired token!"
+    });
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     user.password = hashedPassword;
     user.emailVerifyToken = undefined;
     user.emailVerifyTokenExpire = undefined;
     await user.save();
-    res.status(200).json({ message: "Password reset successfully!" });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+    res.status(200).json({
+      message: "Password reset successfully!"
+    });
+  } catch (err) {
+    res.status(500).json({
+      message: err.message
+    });
+  }
 };
-

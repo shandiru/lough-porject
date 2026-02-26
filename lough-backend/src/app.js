@@ -6,13 +6,13 @@ import categoryRouter from './routes/categoryRoutes.js';
 import serviceRouter from './routes/serviceRoutes.js'
 import staffRouter from './routes/staffroutes.js';
 import googleRouter from './routes/googlecalendarroutes.js';
-import { startGoogleCalendarCrons } from './cronJobs/googleCalendarCrons.js';
+import { startGoogleCalendarCrons } from './cronJobs/refreshGoogleTokens.js';
 const app = express();
-const FrontendURL = process.env.FRONTEND_URL ;
+
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
-startGoogleCalendarCrons();
+//startGoogleCalendarCrons();
 app.use('/api/auth', authRoutes);
 app.use('/api/categories', categoryRouter);
 app.use('/api/services', serviceRouter);
