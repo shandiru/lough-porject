@@ -2,18 +2,17 @@ import cron from 'node-cron';
 import { google } from 'googleapis';
 import Staff from '../models/staff.js';
 import Googlebooking from '../models/googlebooking.js';
-
+import config from '../config/index.js';
 const createOAuthClient = () =>
   new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
+    config.google.clientId,
+    config.google.clientSecret,
+    config.google.redirectUri
   );
 
 
 const refreshAllTokens = async () => {
-  console.log('[Token Refresh]  Starting token refresh job...');
-
+ 
   try {
     const connectedStaff = await Staff.find({
       'googleCalendarToken.refresh_token': { $exists: true, $ne: null },
@@ -36,7 +35,7 @@ const refreshAllTokens = async () => {
           });
 
           const { credentials } = await oauth2Client.refreshAccessToken();
-
+          console.log(" fetach data ", credentials);
           await Staff.findByIdAndUpdate(staff._id, {
             'googleCalendarToken.access_token':      credentials.access_token,
             'googleCalendarToken.expiry_date':       credentials.expiry_date || null,
@@ -45,7 +44,7 @@ const refreshAllTokens = async () => {
             'googleCalendarSyncStatus.lastSync':     new Date(),
           });
 
-          console.log(`[Token Refresh]  Refreshed for staff: ${staff._id}`);
+       
 
         } catch (err) {
           console.error(`[Token Refresh]  Failed for staff: ${staff._id}`, err.message);
@@ -64,7 +63,7 @@ const refreshAllTokens = async () => {
 };
 
 const syncAndCleanBookings = async () => {
-  console.log('[GCal Sync]  Starting sync + cleanup job...');
+
 
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
@@ -202,11 +201,9 @@ const syncAndCleanBookings = async () => {
 export const startGoogleCalendarCrons = () => {
 
 
-  cron.schedule('0 * * * *', refreshAllTokens);
-  console.log('[Cron]  Token refresh cron registered (every 1 hour)');
-
+  cron.schedule('*/1 * * * *', refreshAllTokens);
   
   cron.schedule('*/15 * * * *', syncAndCleanBookings);
-  console.log('[Cron]  Sync + cleanup cron registered (every 1 min - test mode)');
+ 
 
 };
