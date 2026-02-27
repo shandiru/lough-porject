@@ -20,6 +20,6 @@ app.use('/api/services', serviceRouter);
 app.use('/api/staff', staffRouter);
 app.use('/api/google',googleRouter );
 app.get('/', (req, res) => {
-    res.json({ message: "Welcome to Lough Backend API!" });
+    res.json({ message: "Welcome to Lough Backend API! phase 1 completed" });
 });
 export default app;
