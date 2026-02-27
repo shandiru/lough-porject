@@ -37,7 +37,7 @@ export const getAllStaff = async (req, res) => {
       .populate('userId', 'firstName lastName email phone gender role isActive lastLogin createdAt')
       .populate('skills', 'name price duration')
       .sort({ createdAt: -1 });
-    console.log(JSON.stringify(staff, null, 2));
+   
     res.status(200).json(staff);
   } catch (err) {
     res.status(500).json({ message: 'Error fetching staff', error: err.message });
