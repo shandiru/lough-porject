@@ -7,9 +7,10 @@ import serviceRouter from './routes/serviceRoutes.js'
 import staffRouter from './routes/staffroutes.js';
 import googleRouter from './routes/googlecalendarroutes.js';
 import { startGoogleCalendarCrons } from './cronJobs/googleCalendarCronjobs.js';
+import config from '../src/config/index.js'
 const app = express();
 
-app.use(cors({ origin: true, credentials: true }));
+app.use(cors({ origin: config.clientUrl, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
  startGoogleCalendarCrons();

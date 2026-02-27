@@ -240,7 +240,7 @@ export const getGoogleCalenderStatus = async (req, res) => {
     const isConnected =
       !!staff.googleCalendarId &&
       staff.googleCalendarSyncStatus?.status === 'connected';
-
+    
     return res.status(200).json(isConnected);
 
   } catch (error) {

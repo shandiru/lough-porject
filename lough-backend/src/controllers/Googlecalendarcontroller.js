@@ -24,7 +24,7 @@ export const getAuthUrl = (req, res) => {
       ],
       state,
     });
-
+      console.log(url);
     res.status(200).json({ url });
   } catch (err) {
     res.status(500).json({ message: 'Failed to generate Google auth URL', error: err.message });
@@ -33,7 +33,7 @@ export const getAuthUrl = (req, res) => {
 
 export const handleCallback = async (req, res) => {
   const { code, state, error } = req.query;
-
+  console.log(req.query);
   if (error) {
     return res.redirect(`${config.clientUrl}/dashboard/staff?gcal=denied`);
   }
