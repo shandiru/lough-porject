@@ -6,6 +6,7 @@ import categoryRouter from './routes/categoryRoutes.js';
 import serviceRouter from './routes/serviceRoutes.js'
 import staffRouter from './routes/staffroutes.js';
 import googleRouter from './routes/googlecalendarroutes.js';
+import leaverouter from './routes/leaveRoutes.js'
 import { startGoogleCalendarCrons } from './cronJobs/googleCalendarCronjobs.js';
 import config from '../src/config/index.js'
 const app = express();
@@ -19,6 +20,7 @@ app.use('/api/categories', categoryRouter);
 app.use('/api/services', serviceRouter);
 app.use('/api/staff', staffRouter);
 app.use('/api/google',googleRouter );
+app.use('/api/leave',leaverouter);
 app.get('/', (req, res) => {
     res.json({ message: "Welcome to Lough Backend API! phase 1 completed" });
 });

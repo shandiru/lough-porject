@@ -1,10 +1,11 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
+
 const { Schema } = mongoose;
 
 const leavesSchema = new Schema({
   staffMember: {
     type: Schema.Types.ObjectId,
-    ref: 'Staff',
+    ref: 'User', 
     required: [true, 'Staff member reference is required']
   },
   startDate: {
@@ -32,7 +33,7 @@ const leavesSchema = new Schema({
     type: String,
     required: true,
     enum: ['pending', 'approved', 'rejected'],
-    default: 'approved'
+    default: 'pending' 
   },
   requestedBy: {
     type: Schema.Types.ObjectId,
@@ -48,11 +49,10 @@ const leavesSchema = new Schema({
   timestamps: true 
 });
 
-
 leavesSchema.index({ staffMember: 1 });
 leavesSchema.index({ startDate: 1, endDate: 1 });
 leavesSchema.index({ status: 1 });
 
 const Leave = mongoose.model('Leave', leavesSchema);
 
-module.exports = Leave;
+export default Leave;
