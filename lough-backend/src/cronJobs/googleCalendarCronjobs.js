@@ -157,8 +157,6 @@ const syncAndCleanBookings = async () => {
 export const startGoogleCalendarCrons = () => {
 
    cron.schedule('0 * * * *', refreshAllTokens);
-
-
    cron.schedule('*/15 * * * *', syncAndCleanBookings);
 
  
