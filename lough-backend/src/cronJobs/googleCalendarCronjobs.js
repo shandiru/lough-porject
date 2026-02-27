@@ -3,6 +3,7 @@ import { google } from 'googleapis';
 import Staff from '../models/staff.js';
 import Googlebooking from '../models/googlebooking.js';
 import config from '../config/index.js';
+
 const createOAuthClient = () =>
   new google.auth.OAuth2(
     config.google.clientId,
@@ -12,19 +13,15 @@ const createOAuthClient = () =>
 
 
 const refreshAllTokens = async () => {
- 
   try {
     const connectedStaff = await Staff.find({
       'googleCalendarToken.refresh_token': { $exists: true, $ne: null },
-      'googleCalendarSyncStatus.status':   'connected',
+      'googleCalendarSyncStatus.status': 'connected',
     }).select('_id googleCalendarToken googleCalendarSyncStatus');
 
-    if (!connectedStaff.length) {
-      console.log('[Token Refresh]   No connected staff. Skipping.');
-      return;
-    }
+    if (!connectedStaff.length) return;
 
-    console.log(`[Token Refresh]  Found ${connectedStaff.length} staff to refresh.`);
+    console.log(`[Token Refresh] Processing ${connectedStaff.length} staff members.`);
 
     await Promise.allSettled(
       connectedStaff.map(async (staff) => {
@@ -35,175 +32,134 @@ const refreshAllTokens = async () => {
           });
 
           const { credentials } = await oauth2Client.refreshAccessToken();
-          console.log(" fetach data ", credentials);
+          
+          
           await Staff.findByIdAndUpdate(staff._id, {
-            'googleCalendarToken.access_token':      credentials.access_token,
-            'googleCalendarToken.expiry_date':       credentials.expiry_date || null,
-            'googleCalendarSyncStatus.status':       'connected',
+            'googleCalendarToken.access_token': credentials.access_token,
+            'googleCalendarToken.expiry_date': credentials.expiry_date || null,
+            'googleCalendarSyncStatus.status': 'connected',
             'googleCalendarSyncStatus.errorMessage': null,
-            'googleCalendarSyncStatus.lastSync':     new Date(),
-          });
-
-       
+            'googleCalendarSyncStatus.lastSync': new Date(),
+          }, { returnDocument: 'after' });
 
         } catch (err) {
-          console.error(`[Token Refresh]  Failed for staff: ${staff._id}`, err.message);
+          console.error(`[Token Refresh] Failed for staff ${staff._id}:`, err.message);
+          
           await Staff.findByIdAndUpdate(staff._id, {
-            'googleCalendarSyncStatus.status':       'error',
-            'googleCalendarSyncStatus.errorMessage': 'Token refresh failed. Please reconnect Google Calendar.',
-          });
+            'googleCalendarSyncStatus.status': 'error',
+            'googleCalendarSyncStatus.errorMessage': 'Token refresh failed. Manual reconnection required.',
+          }, { returnDocument: 'after' });
         }
       })
     );
-
-    console.log('[Token Refresh]  Token refresh job complete.');
+    console.log('[Token Refresh] Job complete.');
   } catch (error) {
-    console.error('[Token Refresh]  Job error:', error.message);
+    console.error('[Token Refresh] Fatal Error:', error.message);
   }
 };
 
+
 const syncAndCleanBookings = async () => {
-
-
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
 
   try {
-   
-    const deleted = await Googlebooking.deleteMany({
-      date: { $lt: todayStart },
-    });
-    if (deleted.deletedCount > 0) {
-      console.log(`[GCal Sync]   Deleted ${deleted.deletedCount} past bookings from DB.`);
-    }
+    
+    await Googlebooking.deleteMany({ date: { $lt: todayStart } });
 
-  
     const connectedStaff = await Staff.find({
       'googleCalendarToken.refresh_token': { $exists: true, $ne: null },
-      'googleCalendarSyncStatus.status':   'connected',
+      'googleCalendarSyncStatus.status': 'connected',
     }).select('_id googleCalendarToken googleCalendarId');
 
-    if (!connectedStaff.length) {
-      console.log('[GCal Sync]  No connected staff. Skipping.');
-      return;
-    }
-
-    console.log(`[GCal Sync]  Found ${connectedStaff.length} connected staff.`);
+    if (!connectedStaff.length) return;
 
     await Promise.allSettled(
       connectedStaff.map(async (staff) => {
         try {
           const oauth2Client = createOAuthClient();
           oauth2Client.setCredentials({
-            access_token:  staff.googleCalendarToken.access_token,
+            access_token: staff.googleCalendarToken.access_token,
             refresh_token: staff.googleCalendarToken.refresh_token,
-            expiry_date:   staff.googleCalendarToken.expiry_date,
+            expiry_date: staff.googleCalendarToken.expiry_date,
           });
 
-          const calendar   = google.calendar({ version: 'v3', auth: oauth2Client });
-          const calendarId = staff.googleCalendarId || 'primary';
-
-         
-          console.log(`\n[GCal Sync] 📡 Fetching events from Google Calendar for staff: ${staff._id}`);
-
+          const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+          
           const eventsResponse = await calendar.events.list({
-            calendarId,
-            timeMin:      todayStart.toISOString(),
+            calendarId: staff.googleCalendarId || 'primary',
+            timeMin: todayStart.toISOString(),
             singleEvents: true,
-            orderBy:      'startTime',
-            maxResults:   250,
+            orderBy: 'startTime',
+            maxResults: 100,
           });
 
           const googleEvents = eventsResponse.data.items || [];
-
-      
-          if (googleEvents.length === 0) {
-            console.log(`[GCal Sync] ℹ️  No events found in Google Calendar for staff: ${staff._id}`);
-          } else {
-            console.log(`[GCal Sync] 📋 Found ${googleEvents.length} events for staff: ${staff._id}`);
-            console.log('─'.repeat(60));
-            googleEvents.forEach((event, index) => {
-              const start = event.start?.dateTime || event.start?.date || 'N/A';
-              const end   = event.end?.dateTime   || event.end?.date   || 'N/A';
-              console.log(`  [${index + 1}] 📅 "${event.summary || 'No Title'}"`);
-              console.log(`       🕐 Start     : ${start}`);
-              console.log(`       🕑 End       : ${end}`);
-              console.log(`       🆔 Event ID  : ${event.id}`);
-              console.log('');
-            });
-            console.log('─'.repeat(60));
-          }
-
-         
+          console.log(googleEvents);
           for (const event of googleEvents) {
             try {
               const startRaw = event.start?.dateTime || event.start?.date;
-              const endRaw   = event.end?.dateTime   || event.end?.date;
-
+              const endRaw = event.end?.dateTime || event.end?.date;
               if (!startRaw || !endRaw) continue;
 
               const startDate = new Date(startRaw);
-              const endDate   = new Date(endRaw);
-
+              const endDate = new Date(endRaw);
               if (startDate < todayStart) continue;
 
               const dateOnly = new Date(startDate);
               dateOnly.setHours(0, 0, 0, 0);
 
-              const startTime = startDate.toTimeString().slice(0, 5); // "10:00"
-              const endTime   = endDate.toTimeString().slice(0, 5);   // "11:00"
-
              
               await Googlebooking.findOneAndUpdate(
-                {
-                  staffId:               staff._id,
-                  googleCalendarEventId: event.id,
+                { 
+                  staffId: staff._id, 
+                  googleCalendarEventId: event.id 
                 },
                 {
-                  staffId:               staff._id,
-                  date:                  dateOnly,
-                  startTime,
-                  endTime,
+                  staffId: staff._id,
+                  date: dateOnly,
+                  startTime: startDate.toTimeString().slice(0, 5),
+                  endTime: endDate.toTimeString().slice(0, 5),
                   googleCalendarEventId: event.id,
-                  googleCalendarSynced:  true,
+                  googleCalendarSynced: true,
                 },
-                { upsert: true, new: true }
+                { 
+                  upsert: true, 
+                  returnDocument: 'after', 
+                  setDefaultsOnInsert: true 
+                }
               );
-
-              console.log(`[GCal Sync] 💾 Stored: "${event.summary || 'Appointment'}" → ${dateOnly.toDateString()} ${startTime}-${endTime}`);
-
             } catch (storeErr) {
-              console.error(`[GCal Sync] ❌ Store failed for event: ${event.id}`, storeErr.message);
+              
+              if (storeErr.code !== 11000) {
+                console.error(`[Sync] Error storing event ${event.id}:`, storeErr.message);
+              }
             }
           }
 
-       
+          
           await Staff.findByIdAndUpdate(staff._id, {
             'googleCalendarSyncStatus.lastSync': new Date(),
-          });
-
-          console.log(`[GCal Sync]  Done for staff: ${staff._id}\n`);
+          }, { returnDocument: 'after' });
 
         } catch (staffErr) {
-          console.error(`[GCal Sync]  Sync failed for staff: ${staff._id}`, staffErr.message);
+          console.error(`[Sync] Failed for staff ${staff._id}:`, staffErr.message);
         }
       })
     );
-
-    console.log('[GCal Sync]  Sync + cleanup job complete.');
-
+    console.log('[Sync] Calendar sync completed.');
   } catch (error) {
-    console.error('[GCal Sync]  Job error:', error.message);
+    console.error('[Sync] Fatal Job Error:', error.message);
   }
 };
 
 
 export const startGoogleCalendarCrons = () => {
 
+   cron.schedule('0 * * * *', refreshAllTokens);
 
-  cron.schedule('*/1 * * * *', refreshAllTokens);
-  
-  cron.schedule('*/15 * * * *', syncAndCleanBookings);
+
+   cron.schedule('*/15 * * * *', syncAndCleanBookings);
+
  
-
 };

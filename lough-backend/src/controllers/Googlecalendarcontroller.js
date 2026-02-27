@@ -62,7 +62,7 @@ export const handleCallback = async (req, res) => {
     const staff = await Staff.findOne({ userId });
     if (!staff) {
       console.error(`Google callback: no Staff found for userId ${userId}`);
-      return res.redirect(`${process.env.CLIENT_URL}/dashboard/staff?gcal=error`);
+      return res.redirect(`${config.clientUrl}/dashboard/staff?gcal=error`);
     }
 
 
