@@ -1,139 +1,170 @@
 import Leave from '../models/leave.js';
+import Staff from '../models/staff.js';
+import User  from '../models/user.js';
 import nodemailer from 'nodemailer';
 import config from '../config/index.js';
 
+// ── Email helper ──────────────────────────────────────────────────────────────
+const sendStatusEmail = async (to, name, type, start, end, status, note) => {
+  const transport = nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user: config.email.user, pass: config.email.pass },
+  });
+  const color  = status === 'approved' ? '#22B8C8' : '#ef4444';
+  const emoji  = status === 'approved' ? '✅' : '❌';
+  const title  = `Leave ${status.charAt(0).toUpperCase() + status.slice(1)} ${emoji}`;
 
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: config.email.user,
-    pass: config.email.pass
-  }
-});
-
-
-const sendLeaveStatusEmail = async (leave, status, adminReason = '') => {
-  const isApproved = status === 'approved';
-  const statusColor = isApproved ? '#22B8C8' : '#B62025';
-  const statusTitle = isApproved ? 'Leave Approved' : 'Leave Rejected';
-
-  const mailOptions = {
-    to: leave.staffMember.email,
-    subject: `Leave Request Update - ${status.toUpperCase()}`,
+  await transport.sendMail({
+    to,
+    subject: `Your Leave Request has been ${status} - Lough Skin`,
     html: `
-      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 500px; margin: auto; padding: 30px; background-color: #F5EDE4; border-radius: 20px; border: 1px solid #e0d5c8;">
-        <h2 style="color: ${statusColor}; margin-bottom: 10px; text-align: center;">${statusTitle}</h2>
-        
-        <div style="background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-          <p style="color: #444; font-size: 16px;">Hi <strong>${leave.staffMember.firstName}</strong>,</p>
-          <p style="color: #555; font-size: 15px;">Your leave request has been <strong>${status}</strong>:</p>
-          
-          <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; margin: 20px 0;">
-             <p style="margin: 5px 0; color: #666;"><strong>Dates:</strong> ${new Date(leave.startDate).toDateString()} - ${new Date(leave.endDate).toDateString()}</p>
-             <p style="margin: 5px 0; color: #666;"><strong>Type:</strong> ${leave.type}</p>
-          </div>
-
-          <div style="text-align: center; margin: 30px 0;">
-            <span style="display: inline-block; background: ${statusColor}; color: white; padding: 12px 30px; border-radius: 10px; font-weight: bold; text-transform: uppercase;">
-              ${status}
-            </span>
-          </div>
-
-          ${adminReason ? `
-            <div style="background: #fff3cd; padding: 15px; border-radius: 8px; border-left: 5px solid ${statusColor};">
-              <p style="margin: 0; font-size: 14px; color: #856404;"><strong>Admin Feedback:</strong></p>
-              <p style="margin: 5px 0 0 0; color: #666; font-style: italic;">"${adminReason}"</p>
-            </div>
-          ` : ''}
+      <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px;
+                  background:#F5EDE4;border-radius:16px">
+        <h2 style="color:${color};margin-bottom:8px">${title}</h2>
+        <p style="color:#555">Hi <strong>${name}</strong>,</p>
+        <p style="color:#555">Your leave request has been <strong>${status}</strong>.</p>
+        <div style="background:#fff;border-radius:12px;padding:16px;margin:16px 0">
+          <p style="margin:4px 0"><strong>Type:</strong> ${type.charAt(0).toUpperCase()+type.slice(1)}</p>
+          <p style="margin:4px 0"><strong>From:</strong> ${new Date(start).toDateString()}</p>
+          <p style="margin:4px 0"><strong>To:</strong>   ${new Date(end).toDateString()}</p>
+          ${note ? `<p style="margin:8px 0 0;color:#555"><strong>Admin Note:</strong> ${note}</p>` : ''}
         </div>
-        <p style="color: #999; font-size: 12px; margin-top: 25px; text-align: center;">&copy; 2026 Lough Skin Portal</p>
-      </div>`
-  };
-  return transporter.sendMail(mailOptions);
+        <p style="color:#aaa;font-size:12px">Lough Skin Staff Portal</p>
+      </div>`,
+  });
 };
 
-
-export const requestLeave = async (req, res) => {
+// ── STAFF: Apply leave ────────────────────────────────────────────────────────
+export const applyLeave = async (req, res) => {
   try {
-    const { startDate, endDate, type, reason } = req.body;
-    const leave = await Leave.create({
-      staffMember: req.user._id,
-      startDate,
-      endDate,
-      type,
-      reason,
-      status: 'pending'
+    const { type, startDate, endDate, reason } = req.body;
+    const staff = await Staff.findOne({ userId: req.user.id });
+    if (!staff) return res.status(404).json({ message: 'Staff profile not found' });
+
+    const overlap = await Leave.findOne({
+      staffId: staff._id,
+      status: { $in: ['pending', 'approved'] },
+      startDate: { $lte: new Date(endDate) },
+      endDate:   { $gte: new Date(startDate) },
     });
-    res.status(201).json({ success: true, data: leave });
+    if (overlap) return res.status(400).json({ message: 'You already have a leave overlapping these dates.' });
+
+    const leave = await Leave.create({
+      staffId: staff._id, type,
+      startDate: new Date(startDate),
+      endDate:   new Date(endDate),
+      reason,
+    });
+
+    const populated = await Leave.findById(leave._id).populate({
+      path: 'staffId',
+      populate: { path: 'userId', select: 'firstName lastName email' },
+    });
+
+    // Real-time → admin
+    req.app.get('io')?.to('admin-room').emit('leave:new', {
+      message: `New leave request from ${populated.staffId.userId.firstName} ${populated.staffId.userId.lastName}`,
+      leave: populated,
+    });
+
+    res.status(201).json({ message: 'Leave request submitted!', leave: populated });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(400).json({ message: 'Error applying leave', error: err.message });
   }
 };
 
-
-export const approveLeave = async (req, res) => {
-  try {
-    const leave = await Leave.findById(req.params.id).populate('staffMember', 'firstName email');
-    if (!leave) return res.status(404).json({ message: "Leave record not found" });
-
-    leave.status = 'approved';
-    leave.approvedBy = req.user._id;
-    await leave.save(); // Triggers middleware and updates timestamps correctly
-
-    await sendLeaveStatusEmail(leave, 'approved');
-    res.status(200).json({ success: true, message: "Leave approved and email sent" });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-
-export const rejectLeave = async (req, res) => {
-  const { adminReason } = req.body;
-  try {
-    const leave = await Leave.findById(req.params.id).populate('staffMember', 'firstName email');
-    if (!leave) return res.status(404).json({ message: "Leave record not found" });
-
-    leave.status = 'rejected';
-    leave.approvedBy = req.user._id;
-    await leave.save();
-
-    await sendLeaveStatusEmail(leave, 'rejected', adminReason);
-    res.status(200).json({ success: true, message: "Leave rejected and email sent" });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-
-export const cancelLeave = async (req, res) => {
-  try {
-    const leave = await Leave.findOne({ _id: req.params.id, staffMember: req.user._id });
-    if (!leave) return res.status(404).json({ message: "Leave not found" });
-    if (leave.status !== 'pending') return res.status(400).json({ message: "Cannot cancel processed leave" });
-
-    await leave.deleteOne();
-    res.status(200).json({ message: "Leave cancelled successfully" });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-
+// ── STAFF: Get my leaves ──────────────────────────────────────────────────────
 export const getMyLeaves = async (req, res) => {
   try {
-    const leaves = await Leave.find({ staffMember: req.user._id }).sort({ createdAt: -1 });
-    res.status(200).json({ success: true, data: leaves });
+    const staff = await Staff.findOne({ userId: req.user.id });
+    if (!staff) return res.status(404).json({ message: 'Staff not found' });
+    const leaves = await Leave.find({ staffId: staff._id }).sort({ createdAt: -1 });
+    res.status(200).json(leaves);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
+// ── STAFF: Cancel pending leave ───────────────────────────────────────────────
+export const cancelLeave = async (req, res) => {
+  try {
+    const staff = await Staff.findOne({ userId: req.user.id });
+    if (!staff) return res.status(404).json({ message: 'Staff not found' });
 
+    const leave = await Leave.findOne({ _id: req.params.id, staffId: staff._id });
+    if (!leave) return res.status(404).json({ message: 'Leave not found' });
+    if (leave.status !== 'pending') return res.status(400).json({ message: 'Only pending leaves can be cancelled' });
+
+    leave.status = 'cancelled';
+    await leave.save();
+
+    const staffUser = await User.findById(staff.userId);
+    req.app.get('io')?.to('admin-room').emit('leave:cancelled', {
+      message: `${staffUser.firstName} ${staffUser.lastName} cancelled their leave request.`,
+      leaveId: req.params.id,
+    });
+
+    res.status(200).json({ message: 'Leave cancelled', leave });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ── ADMIN: Get all leaves ─────────────────────────────────────────────────────
 export const getAllLeaves = async (req, res) => {
   try {
-    const leaves = await Leave.find().populate('staffMember', 'firstName lastName role').sort({ createdAt: -1 });
-    res.status(200).json({ success: true, data: leaves });
+    const filter = req.query.status ? { status: req.query.status } : {};
+    const leaves = await Leave.find(filter)
+      .populate({ path: 'staffId', populate: { path: 'userId', select: 'firstName lastName email' } })
+      .sort({ createdAt: -1 });
+    res.status(200).json(leaves);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ── ADMIN: Approve / Reject ───────────────────────────────────────────────────
+export const reviewLeave = async (req, res) => {
+  try {
+    const { status, adminNote } = req.body;
+    if (!['approved', 'rejected'].includes(status))
+      return res.status(400).json({ message: 'Status must be approved or rejected' });
+
+    const leave = await Leave.findById(req.params.id).populate({
+      path: 'staffId',
+      populate: { path: 'userId', select: 'firstName lastName email' },
+    });
+    if (!leave) return res.status(404).json({ message: 'Leave not found' });
+    if (leave.status !== 'pending') return res.status(400).json({ message: 'Only pending leaves can be reviewed' });
+
+    leave.status     = status;
+    leave.adminNote  = adminNote || '';
+    leave.reviewedBy = req.user.id;
+    leave.reviewedAt = new Date();
+    await leave.save();
+
+    // If approved → update staff isOnLeave
+    if (status === 'approved') {
+      await Staff.findByIdAndUpdate(leave.staffId._id, {
+        isOnLeave: true,
+        currentLeave: { startDate: leave.startDate, endDate: leave.endDate, type: leave.type, reason: leave.reason },
+      });
+    }
+
+    const { firstName, lastName, email } = leave.staffId.userId;
+
+    // Send email
+    try {
+      await sendStatusEmail(email, `${firstName} ${lastName}`, leave.type, leave.startDate, leave.endDate, status, adminNote);
+    } catch (e) { console.error('Email error:', e.message); }
+
+    // Real-time → staff
+    req.app.get('io')?.to(`staff-${leave.staffId._id}`).emit('leave:reviewed', {
+      message: `Your leave request has been ${status}.`,
+      status, leaveId: req.params.id, adminNote,
+    });
+
+    res.status(200).json({ message: `Leave ${status}`, leave });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

@@ -1,4 +1,5 @@
 import User from '../models/user.js';
+import Staff from "../models/staff.js";
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
@@ -183,14 +184,15 @@ export const loginUser = async (req, res) => {
     user.lastLogin = Date.now();
     await user.save();
 
-    res.status(200).json({
-      message: "Login successful!",
-      accessToken,
-      user: {
-        name: user.firstName,
-        role: user.role
-      }
-    });
+    const staffDoc = user.role === 'staff' ? await Staff.findOne({ userId: user._id }) : null;
+res.status(200).json({
+  accessToken,
+  user: {
+    name:    user.firstName,
+    role:    user.role,
+    staffId: staffDoc?._id?.toString() ?? null,  // ← இதை add பண்ணு
+  }
+});
   } catch (err) {
     res.status(500).json({
       message: err.message

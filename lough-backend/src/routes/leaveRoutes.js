@@ -1,18 +1,16 @@
 import express from 'express';
-const leaverouter = express.Router();
-import { 
-  requestLeave, approveLeave, rejectLeave, cancelLeave, getMyLeaves, getAllLeaves 
-} from '../controllers/leaveController.js'
-import { verifyToken, verifyAdmin ,verifyStaff } from '../middleware/verifyToken.js';
+import { applyLeave, getMyLeaves, cancelLeave, getAllLeaves, reviewLeave } from '../controllers/leaveController.js';
+import { verifyToken, verifyAdmin, verifyStaff } from '../middleware/verifyToken.js';
 
+const leaveRouter = express.Router();
 
-leaverouter.get('/my-leaves', verifyToken,verifyStaff, getMyLeaves);
-leaverouter.post('/request',  verifyToken,verifyStaff, requestLeave);
-leaverouter.delete('/cancel/:id',verifyToken,verifyStaff, cancelLeave);
+// Staff
+leaveRouter.post('/',              verifyToken, verifyStaff, applyLeave);
+leaveRouter.get('/my',             verifyToken, verifyStaff, getMyLeaves);
+leaveRouter.patch('/:id/cancel',   verifyToken, verifyStaff, cancelLeave);
 
+// Admin
+leaveRouter.get('/',               verifyToken, verifyAdmin, getAllLeaves);
+leaveRouter.patch('/:id/review',   verifyToken, verifyAdmin, reviewLeave);
 
-leaverouter.get('/admin/all', verifyToken,verifyAdmin, getAllLeaves);
-leaverouter.put('/admin/approve/:id',  verifyToken,verifyAdmin,  approveLeave);
-leaverouter.put('/admin/reject/:id',  verifyToken,verifyAdmin,  rejectLeave);
-
-export default leaverouter;
+export default leaveRouter;

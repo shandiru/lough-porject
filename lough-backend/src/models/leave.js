@@ -1,58 +1,34 @@
 import mongoose from 'mongoose';
 
-const { Schema } = mongoose;
+const leaveSchema = new mongoose.Schema(
+  {
+    staffId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Staff',
+      required: true,
+    },
+    type: {
+      type: String,
+      enum: ['sick', 'vacation', 'training', 'other'],
+      required: true,
+    },
+    startDate: { type: Date, required: true },
+    endDate:   { type: Date, required: true },
+    reason:    { type: String, maxlength: 500 },
+    status: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected', 'cancelled'],
+      default: 'pending',
+    },
+    adminNote:  { type: String, maxlength: 500 },
+    reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    reviewedAt: { type: Date },
+  },
+  { timestamps: true }
+);
 
-const leavesSchema = new Schema({
-  staffMember: {
-    type: Schema.Types.ObjectId,
-    ref: 'User', 
-    required: [true, 'Staff member reference is required']
-  },
-  startDate: {
-    type: Date,
-    required: [true, 'Start date is required']
-  },
-  endDate: {
-    type: Date,
-    required: [true, 'End date is required']
-  },
-  type: {
-    type: String,
-    required: true,
-    enum: {
-      values: ['sick', 'vacation', 'training', 'other'],
-      message: '{VALUE} is not a supported leave type'
-    }
-  },
-  reason: {
-    type: String,
-    required: false,
-    maxlength: [200, 'Reason cannot exceed 200 characters']
-  },
-  status: {
-    type: String,
-    required: true,
-    enum: ['pending', 'approved', 'rejected'],
-    default: 'pending' 
-  },
-  requestedBy: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
-    required: false
-  },
-  approvedBy: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
-    required: false
-  }
-}, {
-  timestamps: true 
-});
+leaveSchema.index({ staffId: 1, status: 1 });
+leaveSchema.index({ status: 1 });
 
-leavesSchema.index({ staffMember: 1 });
-leavesSchema.index({ startDate: 1, endDate: 1 });
-leavesSchema.index({ status: 1 });
-
-const Leave = mongoose.model('Leave', leavesSchema);
-
+const Leave = mongoose.model('Leave', leaveSchema);
 export default Leave;
