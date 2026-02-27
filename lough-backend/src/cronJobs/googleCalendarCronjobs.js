@@ -95,7 +95,7 @@ const syncAndCleanBookings = async () => {
           });
 
           const googleEvents = eventsResponse.data.items || [];
-          console.log(googleEvents);
+        
           for (const event of googleEvents) {
             try {
               const startRaw = event.start?.dateTime || event.start?.date;
