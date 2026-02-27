@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
 
-// ─── Helper: send invite email ───────────────────────────────────────────────
+
 const sendInviteEmail = async (email, token) => {
   const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -27,7 +27,7 @@ const sendInviteEmail = async (email, token) => {
   });
 };
 
-// ─── GET all staff ────────────────────────────────────────────────────────────
+
 export const getAllStaff = async (req, res) => {
   try {
     const staff = await Staff.find()
@@ -41,7 +41,7 @@ export const getAllStaff = async (req, res) => {
   }
 };
 
-// ─── GET single staff ─────────────────────────────────────────────────────────
+
 export const getStaffById = async (req, res) => {
   try {
     const staff = await Staff.findById(req.params.id)
@@ -55,32 +55,32 @@ export const getStaffById = async (req, res) => {
   }
 };
 
-// ─── POST: Create User + Staff profile + send invite email ───────────────────
+
 export const createStaff = async (req, res) => {
   try {
     const {
-      // User fields
+
       firstName, lastName, email, phone, gender,
-      // Staff fields
+   
       skills, genderRestriction, bio, specializations, workingHours,
     } = req.body;
 
-    // 1. Check if active user already exists
+   
     const existingUser = await User.findOne({ email });
     if (existingUser && existingUser.isActive) {
       return res.status(400).json({ message: 'A user with this email already exists!' });
     }
-    // If inactive invite exists, remove it to re-invite
+   
     if (existingUser && !existingUser.isActive) {
       await User.deleteOne({ _id: existingUser._id });
       await Staff.deleteOne({ userId: existingUser._id });
     }
 
-    // 2. Generate invite token
+    
     const token = crypto.randomBytes(32).toString('hex');
     const expires = Date.now() + 5 * 60 * 1000; // 5 min
 
-    // 3. Create User (isActive = false until they verify)
+
     const tempPassword = await bcrypt.hash(crypto.randomBytes(8).toString('hex'), 10);
     const newUser = new User({
       firstName,
@@ -96,7 +96,7 @@ export const createStaff = async (req, res) => {
     });
     await newUser.save();
 
-    // 4. Create Staff profile linked to this user
+   
     const newStaff = new Staff({
       userId: newUser._id,
       skills: skills || [],
@@ -107,10 +107,10 @@ export const createStaff = async (req, res) => {
     });
     await newStaff.save();
 
-    // 5. Send invite email
+ 
     await sendInviteEmail(email, token);
 
-    // 6. Return populated staff
+   
     const populated = await Staff.findById(newStaff._id)
       .populate('userId', 'firstName lastName email phone gender role isActive lastLogin')
       .populate('skills', 'name price duration');
@@ -121,7 +121,7 @@ export const createStaff = async (req, res) => {
   }
 };
 
-// ─── PUT: Update staff profile ────────────────────────────────────────────────
+
 export const updateStaff = async (req, res) => {
   try {
     const { id } = req.params;
@@ -130,7 +130,7 @@ export const updateStaff = async (req, res) => {
       skills, genderRestriction, bio, specializations, isOnLeave, workingHours, currentLeave,
     } = req.body;
 
-    // Update user fields if provided
+
     const staff = await Staff.findById(id);
     if (!staff) return res.status(404).json({ message: 'Staff not found' });
 
@@ -141,7 +141,7 @@ export const updateStaff = async (req, res) => {
       ...(gender && { gender }),
     });
 
-    // Update staff fields
+  
     const updated = await Staff.findByIdAndUpdate(
       id,
       { skills, genderRestriction, bio, specializations, isOnLeave, workingHours, currentLeave },
@@ -156,7 +156,7 @@ export const updateStaff = async (req, res) => {
   }
 };
 
-// ─── PATCH: Toggle isActive on linked user ───────────────────────────────────
+
 export const toggleStaffActive = async (req, res) => {
   try {
     const { id } = req.params;
@@ -180,7 +180,7 @@ export const toggleStaffActive = async (req, res) => {
   }
 };
 
-// ─── PATCH: Resend invite email ───────────────────────────────────────────────
+
 export const resendInvite = async (req, res) => {
   try {
     const { id } = req.params;
@@ -208,7 +208,7 @@ export const resendInvite = async (req, res) => {
   }
 };
 
-// ─── DELETE: Remove staff profile (and linked user) ──────────────────────────
+
 export const deleteStaff = async (req, res) => {
   try {
     const { id } = req.params;
