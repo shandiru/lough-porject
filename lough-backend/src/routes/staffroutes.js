@@ -1,7 +1,6 @@
 import express from 'express';
 import {
   getAllStaff,
-  getStaffById,
   createStaff,
   updateStaff,
   toggleStaffActive,
@@ -14,7 +13,6 @@ import { verifyToken, verifyAdmin ,verifyStaff } from '../middleware/verifyToken
 const staffRouter = express.Router();
 staffRouter.get('/getGoogleCalenderStatus', verifyToken, verifyStaff,getGoogleCalenderStatus);
 staffRouter.get('/',                     verifyToken, verifyAdmin, getAllStaff);
-staffRouter.get('/:id',                  verifyToken, verifyAdmin, getStaffById);
 staffRouter.post('/',                    verifyToken, verifyAdmin, createStaff);
 staffRouter.put('/:id',                  verifyToken, verifyAdmin, updateStaff);
 staffRouter.patch('/:id/toggle-active',  verifyToken, verifyAdmin, toggleStaffActive);

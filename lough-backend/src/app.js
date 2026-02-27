@@ -13,7 +13,7 @@ const app = express();
 app.use(cors({ origin: config.clientUrl, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
- startGoogleCalendarCrons();
+//  startGoogleCalendarCrons();
 app.use('/api/auth', authRoutes);
 app.use('/api/categories', categoryRouter);
 app.use('/api/services', serviceRouter);

@@ -3,15 +3,18 @@ import User from '../models/user.js';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
-
+import config from '../config/index.js';
 
 const sendInviteEmail = async (email, token) => {
   const transporter = nodemailer.createTransport({
     service: 'gmail',
-    auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
+    auth: { 
+       user: config.email.user,
+       pass: config.email.pass
+     },
   });
 
-  const link = `${process.env.CLIENT_URL}/setup-password?token=${token}&email=${email}`;
+  const link = `${config.clientUrl}/setup-password?token=${token}&email=${email}`;
 
   await transporter.sendMail({
     to: email,
@@ -34,7 +37,7 @@ export const getAllStaff = async (req, res) => {
       .populate('userId', 'firstName lastName email phone gender role isActive lastLogin createdAt')
       .populate('skills', 'name price duration')
       .sort({ createdAt: -1 });
-
+    console.log(JSON.stringify(staff, null, 2));
     res.status(200).json(staff);
   } catch (err) {
     res.status(500).json({ message: 'Error fetching staff', error: err.message });
@@ -42,18 +45,7 @@ export const getAllStaff = async (req, res) => {
 };
 
 
-export const getStaffById = async (req, res) => {
-  try {
-    const staff = await Staff.findById(req.params.id)
-      .populate('userId', 'firstName lastName email phone gender role isActive lastLogin')
-      .populate('skills', 'name price duration');
 
-    if (!staff) return res.status(404).json({ message: 'Staff not found' });
-    res.status(200).json(staff);
-  } catch (err) {
-    res.status(500).json({ message: 'Error fetching staff', error: err.message });
-  }
-};
 
 
 export const createStaff = async (req, res) => {
