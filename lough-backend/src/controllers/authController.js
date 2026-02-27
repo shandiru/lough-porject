@@ -206,7 +206,7 @@ export const refreshToken = async (req, res) => {
   });
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_REFRESHTOEKEN_KEY);
+    const decoded = jwt.verify(token, config.jwt.refreshSecret);
 
     const user = await User.findOne({
       _id: decoded.id,
