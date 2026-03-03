@@ -1,5 +1,5 @@
 import Service from "../models/service.js";
-
+import Category from "../models/category.js";
 export const getServices = async (req, res) => {
   try {
     const services = await Service.find().populate("category", "name").sort({ createdAt: -1 });
@@ -75,5 +75,75 @@ export const deleteService = async (req, res) => {
     res.status(200).json({ message: "Service deleted successfully" });
   } catch (error) {
     res.status(500).json({ message: "Error deleting service", error: error.message });
+  }
+};
+
+
+
+
+
+export const getActiveServicesGrouped = async (req, res) => {
+  try {
+    const result = await Category.aggregate([
+      {
+        $match: { isActive: true } 
+      },
+      {
+        $sort: { displayOrder: 1 } 
+      },
+      {
+        $lookup: {
+          from: "services",
+          let: { categoryId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$category", "$$categoryId"] },
+                    { $eq: ["$isActive", true] } 
+                  ]
+                }
+              }
+            },
+            {
+              $sort: { createdAt: -1 }
+            }
+          ],
+          as: "services"
+        }
+      }
+    ]);
+
+    res.status(200).json(result);
+
+  } catch (error) {
+    res.status(500).json({
+      message: "Error fetching services",
+      error: error.message
+    });
+  }
+};
+
+
+
+export const getServiceById = async (req, res) => {
+  try {
+    const service = await Service.findOne({
+      _id: req.params.id,
+      isActive: true
+    }).populate("category", "name");
+
+    if (!service) {
+      return res.status(404).json({ message: "Service not found" });
+    }
+
+    res.json(service);
+
+  } catch (error) {
+    res.status(500).json({
+      message: "Error fetching service",
+      error: error.message
+    });
   }
 };
