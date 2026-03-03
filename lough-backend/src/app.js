@@ -12,7 +12,7 @@ import staffRouter from './routes/staffroutes.js';
 import googleRouter from './routes/googlecalendarroutes.js';
 import leaveRouter from './routes/leaveRoutes.js';
 import config from './config/index.js';
-
+import {startStaffLeaveCron} from "../src/cronJobs/staffLeaveCron.js"
 const app = express();
 const httpServer = createServer(app);
 
