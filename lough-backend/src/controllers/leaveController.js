@@ -4,7 +4,7 @@ import User  from '../models/user.js';
 import nodemailer from 'nodemailer';
 import config from '../config/index.js';
 
-// ── Email helper ──────────────────────────────────────────────────────────────
+
 const sendStatusEmail = async (to, name, type, start, end, status, note) => {
   const transport = nodemailer.createTransport({
     service: 'gmail',
@@ -34,7 +34,7 @@ const sendStatusEmail = async (to, name, type, start, end, status, note) => {
   });
 };
 
-// ── STAFF: Apply leave ────────────────────────────────────────────────────────
+
 export const applyLeave = async (req, res) => {
   try {
     const { type, startDate, endDate, reason } = req.body;
@@ -67,7 +67,7 @@ export const applyLeave = async (req, res) => {
   }
 };
 
-// ── STAFF: Get my leaves ──────────────────────────────────────────────────────
+
 export const getMyLeaves = async (req, res) => {
   try {
     const staff = await Staff.findOne({ userId: req.user.id });
@@ -79,7 +79,7 @@ export const getMyLeaves = async (req, res) => {
   }
 };
 
-// ── STAFF: Cancel pending leave ───────────────────────────────────────────────
+
 export const cancelLeave = async (req, res) => {
   try {
     const staff = await Staff.findOne({ userId: req.user.id });
@@ -98,7 +98,6 @@ export const cancelLeave = async (req, res) => {
   }
 };
 
-// ── ADMIN: Get all leaves ─────────────────────────────────────────────────────
 export const getAllLeaves = async (req, res) => {
   try {
     const filter = req.query.status ? { status: req.query.status } : {};
@@ -111,7 +110,7 @@ export const getAllLeaves = async (req, res) => {
   }
 };
 
-// ── ADMIN: Approve / Reject ───────────────────────────────────────────────────
+
 export const reviewLeave = async (req, res) => {
   try {
     const { status, adminNote } = req.body;
@@ -131,7 +130,7 @@ export const reviewLeave = async (req, res) => {
     leave.reviewedAt = new Date();
     await leave.save();
 
-    // If approved → update staff isOnLeave
+
     if (status === 'approved') {
       await Staff.findByIdAndUpdate(leave.staffId._id, {
         isOnLeave: true,
@@ -141,7 +140,7 @@ export const reviewLeave = async (req, res) => {
 
     const { firstName, lastName, email } = leave.staffId.userId;
 
-    // Send email
+ 
     try {
       await sendStatusEmail(email, `${firstName} ${lastName}`, leave.type, leave.startDate, leave.endDate, status, adminNote);
     } catch (e) { console.error('Email error:', e.message); }
