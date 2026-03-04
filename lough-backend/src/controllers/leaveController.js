@@ -61,12 +61,6 @@ export const applyLeave = async (req, res) => {
       populate: { path: 'userId', select: 'firstName lastName email' },
     });
 
-    // Real-time → admin
-    req.app.get('io')?.to('admin-room').emit('leave:new', {
-      message: `New leave request from ${populated.staffId.userId.firstName} ${populated.staffId.userId.lastName}`,
-      leave: populated,
-    });
-
     res.status(201).json({ message: 'Leave request submitted!', leave: populated });
   } catch (err) {
     res.status(400).json({ message: 'Error applying leave', error: err.message });
@@ -97,12 +91,6 @@ export const cancelLeave = async (req, res) => {
 
     leave.status = 'cancelled';
     await leave.save();
-
-    const staffUser = await User.findById(staff.userId);
-    req.app.get('io')?.to('admin-room').emit('leave:cancelled', {
-      message: `${staffUser.firstName} ${staffUser.lastName} cancelled their leave request.`,
-      leaveId: req.params.id,
-    });
 
     res.status(200).json({ message: 'Leave cancelled', leave });
   } catch (err) {
@@ -158,14 +146,13 @@ export const reviewLeave = async (req, res) => {
       await sendStatusEmail(email, `${firstName} ${lastName}`, leave.type, leave.startDate, leave.endDate, status, adminNote);
     } catch (e) { console.error('Email error:', e.message); }
 
-    // Real-time → staff
-    req.app.get('io')?.to(`staff-${leave.staffId._id}`).emit('leave:reviewed', {
-      message: `Your leave request has been ${status}.`,
-      status, leaveId: req.params.id, adminNote,
-    });
-
     res.status(200).json({ message: `Leave ${status}`, leave });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
+};
+
+export const deleteAllLeaves = async (req, res) => {
+  const result = await Leave.deleteMany({});
+  res.status(200).json({ message: `Deleted ${result.deletedCount} leave record(s).`, deletedCount: result.deletedCount });
 };
