@@ -3,7 +3,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
+import customerAuthRouter from './routes/customerAuthRoutes.js';
 // Routes
 import authRoutes    from './routes/authRoutes.js';
 import categoryRouter from './routes/categoryRoutes.js';
@@ -35,7 +35,7 @@ app.use('/api/staff',      staffRouter);
 app.use('/api/google',     googleRouter);
 app.use('/api/leaves',     leaveRouter);
 app.use('/api/profile',    profileRouter);   // ← NEW
-
+app.use('/api/customer/auth', customerAuthRouter);
 app.get('/', (req, res) => res.json({ message: 'Lough Skin API running' }));
 
 export default app;

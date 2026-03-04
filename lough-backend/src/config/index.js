@@ -5,7 +5,8 @@ const config = {
   port: process.env.PORT || 5000,
   mongoUri: process.env.MONGO_URI,
   clientUrl: process.env.CLIENT_URL,
-  userlUrl:process.env.USER_URL,
+  userlUrl: process.env.USER_URL,
+  serverUrl: process.env.SERVER_URL,  // backend own URL — verify email link-ku
  
   adminSecretKey: process.env.ADMIN_SECRET_KEY,
   
