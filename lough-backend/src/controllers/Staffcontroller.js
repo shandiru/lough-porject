@@ -34,7 +34,7 @@ const sendInviteEmail = async (email, token) => {
 export const getAllStaff = async (req, res) => {
   try {
     const staff = await Staff.find()
-      .populate('userId', 'firstName lastName email phone gender role isActive lastLogin createdAt')
+      .populate('userId', 'firstName lastName email phone gender role isActive lastLogin createdAt profileImage')
       .populate('skills', 'name price duration')
       .sort({ createdAt: -1 });
    
@@ -163,7 +163,7 @@ export const toggleStaffActive = async (req, res) => {
     await user.save();
 
     const updated = await Staff.findById(id)
-      .populate('userId', 'firstName lastName email phone gender role isActive lastLogin')
+      .populate('userId', 'firstName lastName email phone gender role isActive lastLogin profileImage')
       .populate('skills', 'name price duration');
 
     res.status(200).json(updated);
