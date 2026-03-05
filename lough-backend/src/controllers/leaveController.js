@@ -102,7 +102,7 @@ export const getAllLeaves = async (req, res) => {
   try {
     const filter = req.query.status ? { status: req.query.status } : {};
     const leaves = await Leave.find(filter)
-      .populate({ path: 'staffId', populate: { path: 'userId', select: 'firstName lastName email' } })
+      .populate({ path: 'staffId', populate: { path: 'userId', select: 'firstName lastName email profileImage' } })
       .sort({ createdAt: -1 });
     res.status(200).json(leaves);
   } catch (err) {
