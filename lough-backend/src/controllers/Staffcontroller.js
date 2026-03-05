@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
 import config from '../config/index.js';
-
+import Leave from '../models/leave.js';
 const sendInviteEmail = async (email, token) => {
   const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -211,7 +211,7 @@ export const deleteStaff = async (req, res) => {
     // Delete user account too
     await User.findByIdAndDelete(staff.userId);
     await Staff.findByIdAndDelete(id);
-
+   await Leave.deleteMany({ staffId: id });
     res.status(200).json({ message: 'Staff and user account deleted' });
   } catch (err) {
     res.status(500).json({ message: 'Error deleting staff', error: err.message });
