@@ -119,6 +119,6 @@ bookingSchema.index({ status: 1 });
 bookingSchema.index({ customerEmail: 1 });
 bookingSchema.index({ stripePaymentIntentId: 1 });
 
-
+const Booking = mongoose.model('Booking', bookingSchema);
 
 export default Booking;

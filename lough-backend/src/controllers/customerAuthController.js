@@ -175,7 +175,7 @@ export const loginCustomer = async (req, res) => {
 
         res.status(200).json({
             accessToken,
-            user: { name: user.firstName, email: user.email, role: user.role },
+            user: { name: user.firstName, email: user.email, role: user.role, gender: user.gender },
         });
     } catch (err) {
         res.status(500).json({ message: err.message });
@@ -193,7 +193,7 @@ export const refreshCustomerToken = async (req, res) => {
 
         res.status(200).json({
             accessToken: generateAccessToken(user),
-            user: { name: user.firstName, email: user.email, role: user.role },
+            user: { name: user.firstName, email: user.email, role: user.role, gender: user.gender },
         });
     } catch (err) {
         return res.status(403).json({ message: 'Invalid refresh token' });

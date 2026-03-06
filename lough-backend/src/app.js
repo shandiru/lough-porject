@@ -11,6 +11,7 @@ import serviceRouter  from './routes/serviceRoutes.js';
 import staffRouter    from './routes/staffroutes.js';
 import googleRouter   from './routes/googlecalendarroutes.js';
 import leaveRouter    from './routes/leaveRoutes.js';
+import bookingRouter  from './routes/bookingRoutes.js';
 import profileRouter  from './routes/profileRoutes.js';   // ← NEW
 import config from './config/index.js';
 
@@ -35,6 +36,7 @@ app.use('/api/staff',      staffRouter);
 app.use('/api/google',     googleRouter);
 app.use('/api/leaves',     leaveRouter);
 app.use('/api/profile',    profileRouter);   // ← NEW
+app.use('/api/bookings',   bookingRouter);
 app.use('/api/customer/auth', customerAuthRouter);
 app.get('/', (req, res) => res.json({ message: 'Lough Skin API running' }));
 

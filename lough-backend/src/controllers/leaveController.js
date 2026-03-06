@@ -1,6 +1,7 @@
 import Leave from '../models/leave.js';
 import Staff from '../models/staff.js';
 import User  from '../models/user.js';
+import Booking from '../models/bookingModel.js';
 import nodemailer from 'nodemailer';
 import config from '../config/index.js';
 
@@ -43,6 +44,7 @@ export const applyLeave = async (req, res) => {
     const staff = await Staff.findOne({ userId: req.user.id });
     if (!staff) return res.status(404).json({ message: 'Staff profile not found' });
 
+    // 1. Check overlapping leave requests
     const overlap = await Leave.findOne({
       staffId: staff._id,
       status: { $in: ['pending', 'approved'] },
@@ -51,6 +53,32 @@ export const applyLeave = async (req, res) => {
     });
     if (overlap) return res.status(400).json({ message: 'You already have a leave overlapping these dates.' });
 
+    // 2. Check existing confirmed bookings within the requested leave dates
+    const leaveStart = new Date(startDate);
+    leaveStart.setHours(0, 0, 0, 0);
+    const leaveEnd = new Date(endDate);
+    leaveEnd.setHours(23, 59, 59, 999);
+
+    const conflictingBooking = await Booking.findOne({
+      staffMember: staff._id,
+      bookingDate: { $gte: leaveStart, $lte: leaveEnd },
+      status: { $in: ['pending', 'confirmed'] },
+    }).populate('service', 'name');
+
+    if (conflictingBooking) {
+      const conflictDate = new Date(conflictingBooking.bookingDate).toDateString();
+      return res.status(400).json({
+        message: `You have an existing booking on ${conflictDate} at ${conflictingBooking.bookingTime} (${conflictingBooking.service?.name || 'service'}). Please resolve it before applying for leave on these dates.`,
+        conflictingBooking: {
+          bookingNumber: conflictingBooking.bookingNumber,
+          date: conflictDate,
+          time: conflictingBooking.bookingTime,
+          service: conflictingBooking.service?.name,
+        },
+      });
+    }
+
+    // 3. All clear — create leave
     const leave = await Leave.create({
       staffId: staff._id, type,
       startDate: new Date(startDate),
@@ -128,6 +156,31 @@ export const updateLeave = async (req, res) => {
       });
       if (overlap)
         return res.status(400).json({ message: 'Another leave already overlaps these dates.' });
+
+      // Check bookings conflict for updated dates too
+      const leaveStart = new Date(startDate);
+      leaveStart.setHours(0, 0, 0, 0);
+      const leaveEnd = new Date(endDate);
+      leaveEnd.setHours(23, 59, 59, 999);
+
+      const conflictingBooking = await Booking.findOne({
+        staffMember: staff._id,
+        bookingDate: { $gte: leaveStart, $lte: leaveEnd },
+        status: { $in: ['pending', 'confirmed'] },
+      }).populate('service', 'name');
+
+      if (conflictingBooking) {
+        const conflictDate = new Date(conflictingBooking.bookingDate).toDateString();
+        return res.status(400).json({
+          message: `You have an existing booking on ${conflictDate} at ${conflictingBooking.bookingTime} (${conflictingBooking.service?.name || 'service'}). Please resolve it before applying for leave on these dates.`,
+          conflictingBooking: {
+            bookingNumber: conflictingBooking.bookingNumber,
+            date: conflictDate,
+            time: conflictingBooking.bookingTime,
+            service: conflictingBooking.service?.name,
+          },
+        });
+      }
     }
 
     if (type)      leave.type      = type;
