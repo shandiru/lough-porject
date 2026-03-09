@@ -210,8 +210,11 @@ export const loginUser = async (req, res) => {
     if (user.role === 'staff') {
       const staff = await Staff.findOne({ userId: user._id });
       if (!staff || !staff.verifiedEmail) {
+        const isPendingChange = staff?.pendingEmail;
         return res.status(403).json({ 
-          message: "Staff email not verified. Please verify your email to login." 
+          message: isPendingChange
+            ? `Your email address has been changed. Please verify your new email (${staff.pendingEmail}) to log in.`
+            : "Staff email not verified. Please verify your email to login."
         });
       }
     }

@@ -114,26 +114,94 @@ export const createStaff = async (req, res) => {
 };
 
 
+const sendEmailChangeVerification = async (newEmail, token, firstName) => {
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: config.email.user,
+      pass: config.email.pass
+    },
+  });
+
+  const link = `${config.clientUrl}/verify-email-change?token=${token}&email=${encodeURIComponent(newEmail)}`;
+
+  await transporter.sendMail({
+    to: newEmail,
+    subject: 'Verify Your New Email – Lough Skin',
+    html: `
+      <div style="font-family:'Segoe UI',sans-serif;max-width:500px;margin:auto;padding:32px;background:#F5EDE4;border-radius:20px;border:1px solid #e0d5c8;">
+        <h2 style="color:#22B8C8;text-align:center;margin-bottom:8px;">Lough Skin</h2>
+        <div style="background:white;padding:25px;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,0.05);">
+          <p style="color:#444;font-size:16px;">Hi <strong>${firstName}</strong>,</p>
+          <p style="color:#555;font-size:15px;line-height:1.6;">
+            Your email address on your Lough Skin staff account has been updated.<br/>
+            Please verify your new email address to continue accessing your account.
+          </p>
+          <div style="text-align:center;margin:30px 0;">
+            <a href="${link}" style="display:inline-block;background:#22B8C8;color:white;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:bold;font-size:15px;">
+              Verify New Email
+            </a>
+          </div>
+          <div style="background:#fff3cd;padding:12px;border-radius:6px;text-align:center;">
+            <p style="color:#856404;font-size:13px;margin:0;">
+              <strong>Note:</strong> This link expires in <strong>24 hours</strong>. Until verified, you will not be able to log in.
+            </p>
+          </div>
+        </div>
+        <p style="color:#999;font-size:12px;margin-top:20px;text-align:center;">
+          If you did not expect this change, contact your administrator immediately.<br/>
+          &copy; 2026 Lough Skin. All rights reserved.
+        </p>
+      </div>
+    `,
+  });
+};
+
 export const updateStaff = async (req, res) => {
   try {
     const { id } = req.params;
     const {
-      firstName, lastName, phone, gender,
-      skills, genderRestriction, bio, specializations, isOnLeave, workingHours, currentLeave,email
+      firstName, lastName, phone, gender, email,
+      skills, genderRestriction, bio, specializations, isOnLeave, workingHours, currentLeave
     } = req.body;
-       
 
-    const staff = await Staff.findById(id);
+    const staff = await Staff.findById(id).populate('userId');
     if (!staff) return res.status(404).json({ message: 'Staff not found' });
 
-    await User.findByIdAndUpdate(staff.userId, {
+    const user = await User.findById(staff.userId._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Handle email change
+    let emailChangeInitiated = false;
+    if (email && email.toLowerCase().trim() !== user.email.toLowerCase().trim()) {
+      // Check if new email is already taken by another active user
+      const emailTaken = await User.findOne({ email: email.toLowerCase().trim(), _id: { $ne: user._id } });
+      if (emailTaken) {
+        return res.status(400).json({ message: 'This email is already in use by another account.' });
+      }
+
+      const token = crypto.randomBytes(32).toString('hex');
+      const expires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+      // Store pending email on Staff, clear verifiedEmail so login is blocked
+      staff.pendingEmail = email.toLowerCase().trim();
+      staff.emailChangeToken = token;
+      staff.emailChangeTokenExpire = expires;
+      staff.verifiedEmail = null;
+      await staff.save();
+
+      await sendEmailChangeVerification(email, token, user.firstName);
+      emailChangeInitiated = true;
+    }
+
+    // Update user personal info (not email — email only changes after verification)
+    await User.findByIdAndUpdate(user._id, {
       ...(firstName && { firstName }),
       ...(lastName && { lastName }),
       ...(phone !== undefined && { phone }),
       ...(gender && { gender }),
     });
 
-  
     const updated = await Staff.findByIdAndUpdate(
       id,
       { skills, genderRestriction, bio, specializations, isOnLeave, workingHours, currentLeave },
@@ -142,7 +210,13 @@ export const updateStaff = async (req, res) => {
       .populate('userId', 'firstName lastName email phone gender role isActive lastLogin')
       .populate('skills', 'name price duration');
 
-    res.status(200).json(updated);
+    res.status(200).json({
+      ...updated.toObject(),
+      emailChangeInitiated,
+      message: emailChangeInitiated
+        ? 'Staff updated. A verification email has been sent to the new address. Staff login is blocked until verified.'
+        : 'Staff updated successfully.'
+    });
   } catch (err) {
     res.status(400).json({ message: 'Error updating staff', error: err.message });
   }
@@ -238,5 +312,39 @@ export const getGoogleCalenderStatus = async (req, res) => {
   } catch (error) {
     console.error('Google Calendar Status Error:', error);
     return res.status(500).json(false);
+  }
+};
+
+export const verifyEmailChange = async (req, res) => {
+  try {
+    const { token, email } = req.body;
+
+    const staff = await Staff.findOne({
+      pendingEmail: email.toLowerCase().trim(),
+      emailChangeToken: token,
+      emailChangeTokenExpire: { $gt: Date.now() },
+    }).populate('userId');
+
+    if (!staff) {
+      return res.status(400).json({ message: 'Verification link is invalid or has expired.' });
+    }
+
+    const user = await User.findById(staff.userId._id);
+    if (!user) return res.status(404).json({ message: 'Staff user not found.' });
+
+    // Apply the new email to User
+    user.email = staff.pendingEmail;
+    await user.save();
+
+    // Mark verified, clear pending fields
+    staff.verifiedEmail = staff.pendingEmail;
+    staff.pendingEmail = null;
+    staff.emailChangeToken = null;
+    staff.emailChangeTokenExpire = null;
+    await staff.save();
+
+    res.status(200).json({ message: 'Email verified successfully! You can now log in with your new email.' });
+  } catch (err) {
+    res.status(500).json({ message: 'Error verifying email change', error: err.message });
   }
 };
