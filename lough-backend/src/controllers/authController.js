@@ -24,6 +24,7 @@ export const inviteUser = async (req, res) => {
 
   try {
     if (adminKey !== config.adminSecretKey) {
+      console.log(config.adminSecretKey);
       return res.status(401).json({
         message: "Incorrect Admin Secret Key!"
       });
@@ -141,6 +142,14 @@ export const verifyAndSetup = async (req, res) => {
     user.emailVerifyToken = undefined;
     user.emailVerifyTokenExpire = undefined;
     await user.save();
+    if (user.role === 'staff') {
+      await Staff.findOneAndUpdate(
+        { userId: user._id }, 
+        { verifiedEmail: user.email },
+       { returnDocument: 'after' }
+      );
+    }
+    
 
     res.status(200).json({
       message: "Verified! You can login now."
@@ -151,7 +160,36 @@ export const verifyAndSetup = async (req, res) => {
     });
   }
 };
+export const verifyTokenStatus = async (req, res) => {
+  const { token, email } = req.body;
 
+  try {
+    const user = await User.findOne({
+      email,
+      emailVerifyToken: token,
+      emailVerifyTokenExpire: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        isValid: false,
+        message: "Link is invalid or has expired!"
+      });
+    }
+
+
+    res.status(200).json({
+      isValid: true,
+      message: "Token is valid."
+    });
+
+  } catch (err) {
+    res.status(500).json({
+      isValid: false,
+      message: err.message
+    });
+  }
+};
 
 export const loginUser = async (req, res) => {
   const {
@@ -169,6 +207,18 @@ export const loginUser = async (req, res) => {
       });
     }
 
+    if (user.role === 'staff') {
+      const staff = await Staff.findOne({ userId: user._id });
+      if (!staff || !staff.verifiedEmail) {
+        const isPendingChange = staff?.pendingEmail;
+        return res.status(403).json({ 
+          message: isPendingChange
+            ? `Your email address has been changed. Please verify your new email (${staff.pendingEmail}) to log in.`
+            : "Staff email not verified. Please verify your email to login."
+        });
+      }
+    }
+    
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
@@ -177,22 +227,22 @@ export const loginUser = async (req, res) => {
       httpOnly: true,
       secure: true,
       sameSite: 'none',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-      path: '/'
+      maxAge: 24 * 60 * 60 * 1000,
+      path: '/api/auth/refresh'
     });
 
     user.lastLogin = Date.now();
     await user.save();
 
-    const staffDoc = user.role === 'staff' ? await Staff.findOne({ userId: user._id }) : null;
-res.status(200).json({
-  accessToken,
-  user: {
-    name:    user.firstName,
-    role:    user.role,
-    staffId: staffDoc?._id?.toString() ?? null,  // ← இதை add பண்ணு
-  }
-});
+
+    res.status(200).json({
+      accessToken,
+      user: {
+        name: user.firstName,
+        role: user.role,
+
+      }
+    });
   } catch (err) {
     res.status(500).json({
       message: err.message
@@ -232,7 +282,7 @@ export const refreshToken = async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Refresh Token Error:", err);
+    console.error("Refresh Token Error:");
     return res.status(403).json({
       message: "Invalid refresh token"
     });
@@ -245,7 +295,7 @@ export const logoutUser = async (req, res) => {
     httpOnly: true,
     secure: true,
     sameSite: 'none',
-    path: '/'
+   path: '/api/auth/refresh'
   });
 
   res.status(200).json({

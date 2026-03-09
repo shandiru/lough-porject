@@ -6,7 +6,8 @@ import {
   toggleStaffActive,
   resendInvite,
   deleteStaff,
-  getGoogleCalenderStatus
+  getGoogleCalenderStatus,
+  verifyEmailChange
 } from '../controllers/Staffcontroller.js';
 import { verifyToken, verifyAdmin ,verifyStaff } from '../middleware/verifyToken.js';
 
@@ -18,5 +19,6 @@ staffRouter.put('/:id',                  verifyToken, verifyAdmin, updateStaff);
 staffRouter.patch('/:id/toggle-active',  verifyToken, verifyAdmin, toggleStaffActive);
 staffRouter.patch('/:id/resend-invite',  verifyToken, verifyAdmin, resendInvite);
 staffRouter.delete('/:id',               verifyToken, verifyAdmin, deleteStaff);
+staffRouter.post('/verify-email-change', verifyEmailChange);
 
 export default staffRouter;

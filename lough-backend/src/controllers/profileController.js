@@ -39,7 +39,7 @@ export const updateMyProfile = async (req, res) => {
     if (req.file)            userUpdate.profileImage = `/uploads/profiles/${req.file.filename}`;
 
     const updatedUser = await User.findByIdAndUpdate(userId, userUpdate, {
-      new: true,
+      returnDocument: 'after',
       runValidators: true,
     }).select('firstName lastName email phone gender profileImage role');
 
@@ -49,7 +49,7 @@ export const updateMyProfile = async (req, res) => {
       staffData = await Staff.findOneAndUpdate(
         { userId },
         { bio },
-        { new: true, runValidators: true }
+        { returnDocument: 'after', runValidators: true }
       ).populate('skills', 'name price duration');
     }
 

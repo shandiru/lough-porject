@@ -65,6 +65,26 @@ const staffSchema = new mongoose.Schema(
       lastSync: Date,
       status: { type: String, enum: ['connected', 'disconnected', 'error'], default: 'disconnected' },
       errorMessage: String
+    },
+    verifiedEmail: {
+      type: String,
+      default: null,
+      lowercase: true,
+      trim: true
+    },
+    pendingEmail: {
+      type: String,
+      default: null,
+      lowercase: true,
+      trim: true
+    },
+    emailChangeToken: {
+      type: String,
+      default: null
+    },
+    emailChangeTokenExpire: {
+      type: Date,
+      default: null
     }
   },
   { timestamps: true }
