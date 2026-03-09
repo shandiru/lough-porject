@@ -111,8 +111,8 @@ const bookingSchema = new mongoose.Schema(
   }
 );
 
-// ─── Indexes ────────────────────────────────────────────────────────────────
-bookingSchema.index({ bookingNumber: 1 }, { unique: true });
+
+
 bookingSchema.index({ bookingDate: 1 });
 bookingSchema.index({ staffMember: 1, bookingDate: 1 });
 bookingSchema.index({ status: 1 });
