@@ -119,9 +119,9 @@ export const updateStaff = async (req, res) => {
     const { id } = req.params;
     const {
       firstName, lastName, phone, gender,
-      skills, genderRestriction, bio, specializations, isOnLeave, workingHours, currentLeave,
+      skills, genderRestriction, bio, specializations, isOnLeave, workingHours, currentLeave,email
     } = req.body;
-
+       
 
     const staff = await Staff.findById(id);
     if (!staff) return res.status(404).json({ message: 'Staff not found' });
@@ -208,7 +208,7 @@ export const deleteStaff = async (req, res) => {
     const staff = await Staff.findById(id);
     if (!staff) return res.status(404).json({ message: 'Staff not found' });
 
-    // Delete user account too
+   
     await User.findByIdAndDelete(staff.userId);
     await Staff.findByIdAndDelete(id);
    await Leave.deleteMany({ staffId: id });

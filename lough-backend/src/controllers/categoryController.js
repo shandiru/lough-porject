@@ -1,5 +1,5 @@
 import Category from "../models/category.js";
-
+import  Service from "../models/service.js"
 export const getCategories = async (req, res) => {
     try {
 
@@ -67,9 +67,19 @@ export const updateCategory = async (req, res) => {
 };
 
 
+
 export const deleteCategory = async (req, res) => {
     try {
         const { id } = req.params;
+
+        const serviceExists = await Service.findOne({ category: id });
+        
+        if (serviceExists) {
+            return res.status(400).json({ 
+               message: 'This category is currently in use. Please reassign or delete the associated services first.'
+            });
+        }
+
         const deletedCategory = await Category.findByIdAndDelete(id);
 
         if (!deletedCategory) {

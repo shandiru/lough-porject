@@ -1,5 +1,5 @@
 import express from 'express';
-import { inviteUser, verifyAndSetup ,loginUser ,logoutUser,refreshToken,resetPassword,resetPasswordConfirm} from '../controllers/authController.js';
+import { inviteUser, verifyAndSetup ,loginUser ,logoutUser,refreshToken,resetPassword,resetPasswordConfirm , verifyTokenStatus} from '../controllers/authController.js';
 
 const authrouter = express.Router();
 
@@ -12,5 +12,6 @@ authrouter.post('/login', loginUser);
 authrouter.post('/refresh', refreshToken);
 authrouter.post('/logout', logoutUser);
 
+authrouter.post('/verify-token-status', verifyTokenStatus);
 
 export default authrouter;
