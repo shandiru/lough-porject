@@ -146,7 +146,7 @@ export const verifyAndSetup = async (req, res) => {
       await Staff.findOneAndUpdate(
         { userId: user._id }, 
         { verifiedEmail: user.email },
-        { new: true }
+       { returnDocument: 'after' }
       );
     }
     

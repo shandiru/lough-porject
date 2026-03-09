@@ -216,7 +216,7 @@ export const updateStaff = async (req, res) => {
     const updated = await Staff.findByIdAndUpdate(
       id,
       { skills, genderRestriction, bio, specializations, isOnLeave, workingHours, currentLeave },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     )
       .populate('userId', 'firstName lastName email phone gender role isActive lastLogin')
       .populate('skills', 'name price duration');
