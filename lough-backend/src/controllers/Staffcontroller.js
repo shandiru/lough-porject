@@ -200,7 +200,8 @@ export const updateStaff = async (req, res) => {
       };
 
       await staff.save();
-
+       user.email = email.toLowerCase().trim();
+       await user.save();
       await sendEmailChangeVerification(email, token, user.firstName);
       emailChangeInitiated = true;
     }
