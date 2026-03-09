@@ -282,7 +282,7 @@ export const refreshToken = async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Refresh Token Error:", err);
+    console.error("Refresh Token Error:");
     return res.status(403).json({
       message: "Invalid refresh token"
     });

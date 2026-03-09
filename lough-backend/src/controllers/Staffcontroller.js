@@ -5,6 +5,7 @@ import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
 import config from '../config/index.js';
 import Leave from '../models/leave.js';
+import Booking from '../models/bookingModel.js';
 const sendInviteEmail = async (email, token) => {
   const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -285,23 +286,37 @@ export const resendInvite = async (req, res) => {
 };
 
 
+
 export const deleteStaff = async (req, res) => {
   try {
     const { id } = req.params;
 
+   
     const staff = await Staff.findById(id);
     if (!staff) return res.status(404).json({ message: 'Staff not found' });
 
    
+    const activeBookings = await Booking.findOne({ 
+      staffMember: id, 
+      status: { $in: ['pending', 'confirmed'] } 
+    });
+
+    if (activeBookings) {
+      return res.status(400).json({ 
+        message: 'Cannot delete staff: This staff member has active bookings.' 
+      });
+    }
+
+   
     await User.findByIdAndDelete(staff.userId);
     await Staff.findByIdAndDelete(id);
-   await Leave.deleteMany({ staffId: id });
-    res.status(200).json({ message: 'Staff and user account deleted' });
+    await Leave.deleteMany({ staffId: id });
+
+    res.status(200).json({ message: 'Staff and user account deleted successfully' });
   } catch (err) {
     res.status(500).json({ message: 'Error deleting staff', error: err.message });
   }
 };
-
 
 export const getGoogleCalenderStatus = async (req, res) => {
   try {
