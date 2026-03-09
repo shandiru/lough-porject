@@ -170,7 +170,8 @@ export const updateStaff = async (req, res) => {
 
     const user = await User.findById(staff.userId._id);
     if (!user) return res.status(404).json({ message: 'User not found' });
-
+     user.isActive = false;
+     await user.save();
     // Handle email change
     let emailChangeInitiated = false;
     if (email && email.toLowerCase().trim() !== user.email.toLowerCase().trim()) {
@@ -188,6 +189,15 @@ export const updateStaff = async (req, res) => {
       staff.emailChangeToken = token;
       staff.emailChangeTokenExpire = expires;
       staff.verifiedEmail = null;
+
+      staff.googleCalendarToken = undefined;
+      staff.googleCalendarId = undefined;
+      staff.googleCalendarSyncStatus = {
+        lastSync: new Date(),
+        status: 'disconnected',
+        errorMessage: 'Disconnected automatically due to email change.',
+      };
+
       await staff.save();
 
       await sendEmailChangeVerification(email, token, user.firstName);
@@ -331,7 +341,7 @@ export const verifyEmailChange = async (req, res) => {
 
     const user = await User.findById(staff.userId._id);
     if (!user) return res.status(404).json({ message: 'Staff user not found.' });
-
+      user.isActive = true;
     // Apply the new email to User
     user.email = staff.pendingEmail;
     await user.save();
