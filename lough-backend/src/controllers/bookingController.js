@@ -3,31 +3,20 @@ import Staff         from '../models/staff.js';
 import Service       from '../models/service.js';
 import Leave         from '../models/leave.js';
 import User          from '../models/user.js';
-import Googlebooking from '../models/googlebooking.js';
-import { google }    from 'googleapis';
 import config        from '../config/index.js';
+import Googlebooking from '../models/googlebooking.js';
+import TempSlotLock  from '../models/tempSlotLock.js';
+import { google }    from 'googleapis';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+export const toMins   = (t) => { const [h,m] = t.split(':').map(Number); return h*60+m; };
+export const fromMins = (m) => `${Math.floor(m/60).toString().padStart(2,'0')}:${(m%60).toString().padStart(2,'0')}`;
 
-/** "HH:MM" → minutes since midnight */
-const toMins = (t) => {
-  const [h, m] = t.split(':').map(Number);
-  return h * 60 + m;
-};
+const BUFFER = 15; // minutes buffer AFTER a booking ends before next can start
 
-/** minutes since midnight → "HH:MM" */
-const fromMins = (m) => {
-  const h  = Math.floor(m / 60).toString().padStart(2, '0');
-  const mm = (m % 60).toString().padStart(2, '0');
-  return `${h}:${mm}`;
-};
-
-const BUFFER = 15; // minutes gap required between bookings
-
-// ─── Google Calendar event creator ───────────────────────────────────────────
-const addToGoogleCalendar = async (staff, booking, service) => {
+// ─── Google Calendar helper ───────────────────────────────────────────────────
+export const addToGoogleCalendar = async (staff, booking, service) => {
   try {
-    // Only proceed if staff has Google Calendar connected
     if (
       !staff.googleCalendarToken?.access_token ||
       !staff.googleCalendarToken?.refresh_token ||
@@ -46,12 +35,9 @@ const addToGoogleCalendar = async (staff, booking, service) => {
     });
 
     const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
-
-    // Build ISO datetime strings for the booking
-    const dateStr   = new Date(booking.bookingDate).toISOString().split('T')[0]; // "YYYY-MM-DD"
-    const startStr  = `${dateStr}T${booking.bookingTime}:00`;
-    const endMins   = toMins(booking.bookingTime) + service.duration;
-    const endStr    = `${dateStr}T${fromMins(endMins)}:00`;
+    const dateStr  = new Date(booking.bookingDate).toISOString().split('T')[0];
+    const startStr = `${dateStr}T${booking.bookingTime}:00`;
+    const endStr   = `${dateStr}T${fromMins(toMins(booking.bookingTime) + service.duration)}:00`;
 
     const event = await calendar.events.insert({
       calendarId: staff.googleCalendarId || 'primary',
@@ -66,101 +52,75 @@ const addToGoogleCalendar = async (staff, booking, service) => {
         ].filter(Boolean).join('\n'),
         start: { dateTime: startStr, timeZone: 'Europe/London' },
         end:   { dateTime: endStr,   timeZone: 'Europe/London' },
-        colorId: '2', // sage green
+        colorId: '2',
       },
     });
-
     return event.data.id || null;
   } catch (err) {
     console.error('[Google Cal] Failed to create event:', err.message);
-    return null; // Non-fatal — booking still succeeds
+    return null;
   }
 };
 
 // ─── isSlotAvailable ──────────────────────────────────────────────────────────
 /**
- * Returns true if [startMins, endMins] is a valid free slot for the staff on
- * the given date.
+ * Fast check — all DB data is pre-fetched by the caller (getAvailableSlots)
+ * and passed in. No DB calls inside this function = parallel-safe.
  *
- * Checks (in order):
- *   1. Staff.isOnLeave quick flag
- *   2. Leave model — approved full-day AND hourly windows
- *   3. Working hours for that day
- *   4. Break windows
- *   5. Existing Booking model entries + 15-min buffer
- *   6. Googlebooking model (synced Google Calendar events) + 15-min buffer
+ * Buffer rule: next booking can start at (prevEnd + BUFFER).
+ * So 9–10am booked → 10:15 is the earliest next slot (10:00 + 15min buffer).
+ * Trying to book at exactly 10:00 would fail (within buffer of previous end).
  */
-const isSlotAvailable = async (staffId, date, startMins, endMins) => {
-  const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-  const dayName  = dayNames[new Date(date).getDay()];
-
-  const staff = await Staff.findById(staffId);
-  if (!staff) return false;
-
-  // 1. Fast-path: isOnLeave flag (full-day only)
-  if (staff.isOnLeave) return false;
-
-  const dayStart = new Date(date); dayStart.setHours(0, 0, 0, 0);
-  const dayEnd   = new Date(date); dayEnd.setHours(23, 59, 59, 999);
-
-  // 2. Leave model — covers both full-day and hourly
-  const approvedLeaves = await Leave.find({
-    staffId,
-    status:    'approved',
-    startDate: { $lte: dayEnd },
-    endDate:   { $gte: dayStart },
-  });
-
-  for (const lv of approvedLeaves) {
-    if (!lv.isHourly) {
-      // Full-day leave → slot is blocked entirely
-      return false;
-    }
-    // Hourly leave → check time overlap
-    const lStart = toMins(lv.startTime);
-    const lEnd   = toMins(lv.endTime);
-    if (startMins < lEnd && endMins > lStart) return false;
-  }
-
-  // 3. Working hours
-  const daySchedule = staff.workingHours?.[dayName];
-  if (!daySchedule || !daySchedule.isWorking) return false;
-
+const isSlotFreeSync = (startMins, endMins, {
+  daySchedule,
+  approvedLeaves,
+  existingBookings,
+  googleBookings,
+  tempLocks,
+  bookingDate,
+}) => {
+  // 1. Working hours
+  if (!daySchedule?.isWorking) return false;
   const workStart = toMins(daySchedule.start || '09:00');
   const workEnd   = toMins(daySchedule.end   || '17:00');
   if (startMins < workStart || endMins > workEnd) return false;
 
-  // 4. Break windows
+  // 2. Break windows
   for (const brk of (daySchedule.breaks || [])) {
-    const bStart = toMins(brk.start);
-    const bEnd   = toMins(brk.end);
-    if (startMins < bEnd && endMins > bStart) return false;
+    const bS = toMins(brk.start), bE = toMins(brk.end);
+    if (startMins < bE && endMins > bS) return false;
   }
 
-  // 5. Existing Booking model entries + 15-min buffer
-  const existingBookings = await Booking.find({
-    staffMember: staffId,
-    bookingDate: { $gte: dayStart, $lte: dayEnd },
-    status:      { $nin: ['cancelled'] },
-  });
+  // 3. Leave (full-day already filtered out before calling; check hourly)
+  for (const lv of approvedLeaves) {
+    if (!lv.isHourly) return false; // full-day leave
+    const lS = toMins(lv.startTime), lE = toMins(lv.endTime);
+    if (startMins < lE && endMins > lS) return false;
+  }
 
+  // 4. Existing bookings + buffer
+  //    A booking [bStart, bEnd] blocks [(bStart - BUFFER), (bEnd + BUFFER)]
+  //    so new slot must not overlap that blocked window.
   for (const bk of existingBookings) {
-    const bStart = toMins(bk.bookingTime);
-    const bEnd   = bStart + bk.duration;
-    // 15-min buffer on both sides
-    if (startMins < bEnd + BUFFER && endMins > bStart - BUFFER) return false;
+    const bS = toMins(bk.bookingTime);
+    const bE = bS + bk.duration;
+    if (startMins < bE + BUFFER && endMins > bS - BUFFER) return false;
   }
 
-  // 6. Google Calendar (Googlebooking) entries + 15-min buffer
-  const googleBookings = await Googlebooking.find({
-    staffId,
-    date: { $gte: dayStart, $lte: dayEnd },
-  });
-
+  // 5. Google Calendar bookings + buffer
   for (const gb of googleBookings) {
-    const gbStart = toMins(gb.startTime);
-    const gbEnd   = toMins(gb.endTime);
-    if (startMins < gbEnd + BUFFER && endMins > gbStart - BUFFER) return false;
+    const gbS = toMins(gb.startTime), gbE = toMins(gb.endTime);
+    if (startMins < gbE + BUFFER && endMins > gbS - BUFFER) return false;
+  }
+
+  // 6. TempSlotLocks (active payment holds)
+  const dateStr = typeof bookingDate === 'string'
+    ? bookingDate
+    : new Date(bookingDate).toISOString().split('T')[0];
+  for (const lock of tempLocks) {
+    const lS = toMins(lock.bookingTime);
+    // A lock blocks just that exact slot start — treat as BUFFER-width block
+    if (startMins < lS + BUFFER && endMins > lS - BUFFER) return false;
   }
 
   return true;
@@ -168,100 +128,121 @@ const isSlotAvailable = async (staffId, date, startMins, endMins) => {
 
 // ─── GET /api/bookings/available-slots ───────────────────────────────────────
 /**
+ * OPTIMISED — all DB queries run in parallel per staff member,
+ * then slot generation is purely synchronous.
+ *
  * Query params:
- *   serviceId             — required
- *   date                  — required  (YYYY-MM-DD)
- *   customerGender        — optional  customer's own gender
- *   staffGenderPreference — optional  'male' | 'female' | 'any'
- *
- * Filter pipeline per staff member:
- *   A. Must have service as a skill
- *   B. userId.isActive must be true
- *   C. Service genderRestriction must allow customerGender
- *   D. Staff genderRestriction must allow customerGender
- *   E. Staff userId.gender must match staffGenderPreference (if set)
- *   F. Staff.isOnLeave must be false
- *   G. No approved full-day Leave covering this date
- *   H. Must be a working day
- *   I. Per-slot: isSlotAvailable (working hours + breaks + Booking+buffer + Googlebooking+buffer + hourly leaves)
- *
- * Returns: [{ staff: { _id, name, gender, profileImage }, availableSlots: ['09:00', ...] }]
+ *   serviceId, date, customerGender, staffGenderPreference
  */
 export const getAvailableSlots = async (req, res) => {
   try {
     const { serviceId, date, customerGender, staffGenderPreference } = req.query;
 
-    if (!serviceId || !date) {
+    if (!serviceId || !date)
       return res.status(400).json({ message: 'serviceId and date are required' });
-    }
 
-    // Load service
     const service = await Service.findById(serviceId);
-    if (!service || !service.isActive) {
+    if (!service || !service.isActive)
       return res.status(404).json({ message: 'Service not found' });
-    }
 
-    // C. Service-level gender restriction
+    // Service-level gender restriction
     if (service.genderRestriction !== 'all') {
       const allowed = service.genderRestriction === 'male-only' ? 'male' : 'female';
-      if (customerGender && customerGender !== allowed) {
-        return res.status(200).json([]); // service not available for this customer gender
-      }
+      if (customerGender && customerGender !== allowed)
+        return res.status(200).json([]);
     }
 
     const duration = service.duration;
     const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
     const dayName  = dayNames[new Date(date).getDay()];
+    const dayStart = new Date(date); dayStart.setHours(0,0,0,0);
+    const dayEnd   = new Date(date); dayEnd.setHours(23,59,59,999);
+    const dateStr  = date; // "YYYY-MM-DD"
 
-    const dayStart = new Date(date); dayStart.setHours(0, 0, 0, 0);
-    const dayEnd   = new Date(date); dayEnd.setHours(23, 59, 59, 999);
-
-    // A. Find all staff who have this service as a skill
+    // Load all eligible staff (skills match + user active)
     const allStaff = await Staff.find({ skills: serviceId })
       .populate('userId', 'firstName lastName profileImage gender isActive');
 
-    const result = [];
-
-    for (const staff of allStaff) {
+    // Filter staff by gender rules BEFORE hitting DB for slots
+    const eligibleStaff = allStaff.filter(staff => {
       const u = staff.userId;
-
-      // B. Active user
-      if (!u?.isActive) continue;
-
-      // D. Staff genderRestriction vs customerGender
-      if (staff.genderRestriction === 'male-only'   && customerGender !== 'male')   continue;
-      if (staff.genderRestriction === 'female-only' && customerGender !== 'female') continue;
-
-      // E. Customer's preferred staff gender (e.g. "I want female staff only")
+      if (!u?.isActive) return false;
+      if (staff.isOnLeave) return false;
+      // Staff won't serve this customer gender
+      if (staff.genderRestriction === 'male-only'   && customerGender !== 'male')   return false;
+      if (staff.genderRestriction === 'female-only' && customerGender !== 'female') return false;
+      // Customer wants specific staff gender
       if (staffGenderPreference && staffGenderPreference !== 'any') {
-        if (u.gender !== staffGenderPreference) continue;
+        if (u.gender !== staffGenderPreference) return false;
       }
+      // Must be a working day
+      const ds = staff.workingHours?.[dayName];
+      if (!ds?.isWorking) return false;
+      return true;
+    });
 
-      // F. isOnLeave quick flag
-      if (staff.isOnLeave) continue;
+    if (eligibleStaff.length === 0) return res.status(200).json([]);
 
-      // G. Full-day approved leave check
-      const fullDayLeave = await Leave.findOne({
-        staffId:   staff._id,
+    // ── Fetch all DB data IN PARALLEL for all eligible staff ─────────────────
+    const staffIds = eligibleStaff.map(s => s._id);
+
+    const [allLeaves, allBookings, allGoogleBookings, allTempLocks] = await Promise.all([
+      Leave.find({
+        staffId:   { $in: staffIds },
         status:    'approved',
-        isHourly:  { $ne: true },
         startDate: { $lte: dayEnd },
         endDate:   { $gte: dayStart },
-      });
-      if (fullDayLeave) continue;
+      }),
+      Booking.find({
+        staffMember: { $in: staffIds },
+        bookingDate: { $gte: dayStart, $lte: dayEnd },
+        status:      { $nin: ['cancelled'] },
+      }),
+      Googlebooking.find({
+        staffId: { $in: staffIds },
+        date:    { $gte: dayStart, $lte: dayEnd },
+      }),
+      TempSlotLock.find({
+        staffId:     { $in: staffIds },
+        bookingDate: dateStr,
+        expiresAt:   { $gt: new Date() },
+      }),
+    ]);
 
-      // H. Working hours for this day
-      const daySchedule = staff.workingHours?.[dayName];
-      if (!daySchedule || !daySchedule.isWorking) continue;
+    // Index by staffId for O(1) lookup
+    const leavesByStaff   = groupBy(allLeaves,         l  => l.staffId.toString());
+    const bookingsByStaff = groupBy(allBookings,        b  => b.staffMember.toString());
+    const googleByStaff   = groupBy(allGoogleBookings,  g  => g.staffId.toString());
+    const locksByStaff    = groupBy(allTempLocks,        l  => l.staffId.toString());
 
-      const workStart = toMins(daySchedule.start || '09:00');
-      const workEnd   = toMins(daySchedule.end   || '17:00');
+    // ── Build result synchronously ────────────────────────────────────────────
+    const result = [];
 
-      // I. Generate and test each 15-min slot
+    for (const staff of eligibleStaff) {
+      const sid = staff._id.toString();
+      const u   = staff.userId;
+
+      // Skip if full-day leave exists
+      const staffLeaves = leavesByStaff[sid] || [];
+      if (staffLeaves.some(lv => !lv.isHourly)) continue;
+
+      const daySchedule = staff.workingHours[dayName];
+      const workStart   = toMins(daySchedule.start || '09:00');
+      const workEnd     = toMins(daySchedule.end   || '17:00');
+
+      const context = {
+        daySchedule,
+        approvedLeaves:   staffLeaves,
+        existingBookings: bookingsByStaff[sid] || [],
+        googleBookings:   googleByStaff[sid]   || [],
+        tempLocks:        locksByStaff[sid]     || [],
+        bookingDate:      dateStr,
+      };
+
       const availableSlots = [];
       for (let t = workStart; t + duration <= workEnd; t += 15) {
-        const ok = await isSlotAvailable(staff._id, date, t, t + duration);
-        if (ok) availableSlots.push(fromMins(t));
+        if (isSlotFreeSync(t, t + duration, context))
+          availableSlots.push(fromMins(t));
       }
 
       if (availableSlots.length > 0) {
@@ -284,90 +265,93 @@ export const getAvailableSlots = async (req, res) => {
   }
 };
 
-// ─── POST /api/bookings ───────────────────────────────────────────────────────
+// ─── isSlotAvailable (single-staff DB check — used for booking creation guard) ─
+export const isSlotAvailable = async (staffId, date, startMins, endMins) => {
+  const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+  const dayName  = dayNames[new Date(date).getDay()];
+  const dayStart = new Date(date); dayStart.setHours(0,0,0,0);
+  const dayEnd   = new Date(date); dayEnd.setHours(23,59,59,999);
+  const dateStr  = typeof date === 'string' ? date : new Date(date).toISOString().split('T')[0];
+
+  const staff = await Staff.findById(staffId);
+  if (!staff || staff.isOnLeave) return false;
+
+  const [approvedLeaves, existingBookings, googleBookings, tempLocks] = await Promise.all([
+    Leave.find({ staffId, status: 'approved', startDate: { $lte: dayEnd }, endDate: { $gte: dayStart } }),
+    Booking.find({ staffMember: staffId, bookingDate: { $gte: dayStart, $lte: dayEnd }, status: { $nin: ['cancelled'] } }),
+    Googlebooking.find({ staffId, date: { $gte: dayStart, $lte: dayEnd } }),
+    TempSlotLock.find({ staffId, bookingDate: dateStr, expiresAt: { $gt: new Date() } }),
+  ]);
+
+  return isSlotFreeSync(startMins, endMins, {
+    daySchedule:      staff.workingHours?.[dayName],
+    approvedLeaves,
+    existingBookings,
+    googleBookings,
+    tempLocks,
+    bookingDate:      dateStr,
+  });
+};
+
+// ─── POST /api/bookings/admin (admin direct booking — no Stripe) ──────────────
 export const createBooking = async (req, res) => {
   try {
     const {
-      customerName,
-      customerEmail,
-      customerPhone,
-      customerAddress,
-      customerGender,
-      customerNotes,
-      serviceId,
-      staffId,
-      bookingDate,
-      bookingTime,
-      bookingSource = 'website',
-      internalNotes,
+      customerName, customerEmail, customerPhone,
+      customerAddress, customerGender, customerNotes,
+      serviceId, staffId, bookingDate, bookingTime,
+      bookingSource = 'admin', internalNotes,
+      consentFormCompleted = false,
+      consentData,
     } = req.body;
 
-    // Validate service
     const service = await Service.findById(serviceId);
-    if (!service || !service.isActive) {
+    if (!service || !service.isActive)
       return res.status(404).json({ message: 'Service not found' });
-    }
 
-    const duration  = service.duration;
     const startMins = toMins(bookingTime);
-    const endMins   = startMins + duration;
+    const endMins   = startMins + service.duration;
 
-    // Race-condition guard — recheck availability
     const available = await isSlotAvailable(staffId, bookingDate, startMins, endMins);
-    if (!available) {
-      return res.status(409).json({ message: 'This time slot is no longer available. Please choose another.' });
-    }
+    if (!available)
+      return res.status(409).json({ message: 'This time slot is no longer available.' });
 
-    // Amounts (in pence)
     const totalAmount   = service.price * 100;
     const depositAmount = Math.round(totalAmount * (service.depositPercentage || 0.3));
+    const bookingNumber = `BK-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${Math.floor(1000+Math.random()*9000)}`;
 
-    const bookingNumber = `BK-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${Math.floor(1000 + Math.random() * 9000)}`;
-
-    const booking = new Booking({
+    const booking = await Booking.create({
       bookingNumber,
-      customerName,
-      customerEmail,
-      customerPhone,
-      customerAddress,
-      customerGender,
-      customerNotes,
-      service:      serviceId,
-      staffMember:  staffId,
-      bookingDate:  new Date(bookingDate),
+      customerName, customerEmail, customerPhone,
+      customerAddress, customerGender, customerNotes,
+      service:     serviceId,
+      staffMember: staffId,
+      bookingDate: new Date(bookingDate),
       bookingTime,
-      duration,
-      status:           'pending',
+      duration:    service.duration,
+      status:      'confirmed',
       totalAmount,
       depositAmount,
       paidAmount:       0,
       balanceRemaining: totalAmount,
       paymentType:      'deposit',
       paymentStatus:    'pending',
-      consentFormCompleted: false,
+      consentFormCompleted,
+      consentData: consentData || { marketingEmails: false, termsAccepted: false, privacyPolicyAccepted: false },
       bookingSource,
       internalNotes,
       createdBy: req.user?.id || null,
     });
 
-    await booking.save();
-
-    // ── Add event to staff's Google Calendar ─────────────────────────────
     const staff = await Staff.findById(staffId);
     if (staff) {
       const gcalEventId = await addToGoogleCalendar(staff, booking, service);
-      if (gcalEventId) {
-        booking.googleCalendarEventId = gcalEventId;
-        await booking.save();
-      }
+      if (gcalEventId) { booking.googleCalendarEventId = gcalEventId; await booking.save(); }
     }
 
     const populated = await Booking.findById(booking._id)
       .populate('service', 'name price duration')
-      .populate({
-        path: 'staffMember',
-        populate: { path: 'userId', select: 'firstName lastName profileImage' },
-      });
+      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName profileImage' } });
 
     res.status(201).json(populated);
   } catch (err) {
@@ -381,10 +365,7 @@ export const getAllBookings = async (req, res) => {
   try {
     const bookings = await Booking.find()
       .populate('service', 'name price duration')
-      .populate({
-        path: 'staffMember',
-        populate: { path: 'userId', select: 'firstName lastName profileImage' },
-      })
+      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName profileImage' } })
       .sort({ createdAt: -1 });
     res.status(200).json(bookings);
   } catch (err) {
@@ -397,16 +378,133 @@ export const getMyBookings = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
-
     const bookings = await Booking.find({ customerEmail: user.email })
       .populate('service', 'name price duration')
-      .populate({
-        path: 'staffMember',
-        populate: { path: 'userId', select: 'firstName lastName profileImage' },
-      })
+      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName profileImage' } })
       .sort({ bookingDate: -1 });
-
     res.status(200).json(bookings);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── Utility ──────────────────────────────────────────────────────────────────
+function groupBy(arr, keyFn) {
+  return arr.reduce((acc, item) => {
+    const k = keyFn(item);
+    if (!acc[k]) acc[k] = [];
+    acc[k].push(item);
+    return acc;
+  }, {});
+}
+
+// ─── POST /api/bookings/:id/cancel-request (customer) ────────────────────────
+export const requestCancellation = async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+
+    // Only the booking's owner can request cancellation
+    const user = await User.findById(req.user.id);
+    if (!user || user.email.toLowerCase() !== booking.customerEmail.toLowerCase())
+      return res.status(403).json({ message: 'Not authorised' });
+
+    if (['cancelled', 'completed', 'no-show'].includes(booking.status))
+      return res.status(400).json({ message: `Cannot cancel a ${booking.status} booking` });
+
+    if (booking.cancelRequestStatus === 'pending')
+      return res.status(400).json({ message: 'Cancellation request already pending' });
+
+    booking.cancelRequestedAt   = new Date();
+    booking.cancelRequestedBy   = req.user.id;
+    booking.cancelRequestReason = reason || '';
+    booking.cancelRequestStatus = 'pending';
+    await booking.save();
+
+    res.status(200).json({ message: 'Cancellation request submitted', booking });
+  } catch (err) {
+    console.error('[requestCancellation]', err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── POST /api/bookings/:id/cancel-review (admin) ────────────────────────────
+// body: { action: 'approve'|'reject', refundAmount: number (pence, optional), adminNote: string }
+export const reviewCancellation = async (req, res) => {
+  try {
+    const { action, refundAmount = 0, adminNote } = req.body;
+    if (!['approve', 'reject'].includes(action))
+      return res.status(400).json({ message: 'action must be approve or reject' });
+
+    const booking = await Booking.findById(req.params.id).populate('service');
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    if (booking.cancelRequestStatus !== 'pending')
+      return res.status(400).json({ message: 'No pending cancel request on this booking' });
+
+    if (action === 'reject') {
+      booking.cancelRequestStatus = 'rejected';
+      if (adminNote) booking.internalNotes = (booking.internalNotes ? booking.internalNotes + '\n' : '') + `[Cancel rejected] ${adminNote}`;
+      await booking.save();
+      return res.status(200).json({ message: 'Cancellation request rejected', booking });
+    }
+
+    // ── APPROVE ──────────────────────────────────────────────────────────────
+    // Optional Stripe refund
+    let stripeRefunded = false;
+    if (refundAmount > 0 && booking.stripePaymentIntentId) {
+      try {
+        const { default: Stripe } = await import('stripe');
+        const stripe = new Stripe(config.stripe.secretKey);
+        await stripe.refunds.create({
+          payment_intent: booking.stripePaymentIntentId,
+          amount: refundAmount,
+        });
+        stripeRefunded = true;
+      } catch (stripeErr) {
+        console.error('[Stripe refund]', stripeErr.message);
+        return res.status(502).json({ message: 'Stripe refund failed: ' + stripeErr.message });
+      }
+    }
+
+    booking.status               = 'cancelled';
+    booking.cancelRequestStatus  = 'approved';
+    booking.cancelledAt          = new Date();
+    booking.cancelledBy          = req.user.id;
+    booking.cancellationReason   = booking.cancelRequestReason;
+    if (stripeRefunded) {
+      booking.refundAmount   = refundAmount;
+      booking.refundedAt     = new Date();
+      booking.paymentStatus  = refundAmount >= booking.paidAmount ? 'refunded' : 'partially_refunded';
+      booking.paidAmount     = booking.paidAmount - refundAmount;
+    }
+    if (adminNote) booking.internalNotes = (booking.internalNotes ? booking.internalNotes + '\n' : '') + `[Cancel approved] ${adminNote}`;
+    await booking.save();
+
+    res.status(200).json({
+      message: stripeRefunded ? `Booking cancelled and £${(refundAmount/100).toFixed(2)} refunded` : 'Booking cancelled (no refund)',
+      booking,
+    });
+  } catch (err) {
+    console.error('[reviewCancellation]', err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── PATCH /api/bookings/:id/status (admin) ───────────────────────────────────
+export const updateBookingStatus = async (req, res) => {
+  try {
+    const { status, internalNotes } = req.body;
+    const allowed = ['pending', 'confirmed', 'completed', 'cancelled', 'no-show'];
+    if (!allowed.includes(status)) return res.status(400).json({ message: 'Invalid status' });
+    const booking = await Booking.findByIdAndUpdate(
+      req.params.id,
+      { status, ...(internalNotes && { internalNotes }) },
+      { new: true }
+    ).populate('service', 'name price duration')
+     .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName' } });
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    res.status(200).json(booking);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

@@ -5,13 +5,13 @@ import Booking from '../models/bookingModel.js';
 import nodemailer from 'nodemailer';
 import config  from '../config/index.js';
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+
 const toMins = (t) => {
   const [h, m] = t.split(':').map(Number);
   return h * 60 + m;
 };
 
-// ─── Email Helper ─────────────────────────────────────────────────────────────
+
 const sendStatusEmail = async (to, name, type, start, end, status, note, isHourly, startTime, endTime) => {
   const transport = nodemailer.createTransport({
     service: 'gmail',
@@ -44,12 +44,12 @@ const sendStatusEmail = async (to, name, type, start, end, status, note, isHourl
   });
 };
 
-// ─── STAFF: Apply Leave ──────────────────────────────────────────────────────
+
 export const applyLeave = async (req, res) => {
   try {
     const { type, startDate, endDate, reason, isHourly, startTime, endTime } = req.body;
 
-    // Validate hourly fields
+   
     if (isHourly) {
       if (!startTime || !endTime) {
         return res.status(400).json({ message: 'startTime and endTime are required for hourly leave.' });
@@ -57,7 +57,7 @@ export const applyLeave = async (req, res) => {
       if (toMins(startTime) >= toMins(endTime)) {
         return res.status(400).json({ message: 'startTime must be before endTime.' });
       }
-      // For hourly leave startDate must equal endDate
+     
       const s = new Date(startDate); s.setHours(0, 0, 0, 0);
       const e = new Date(endDate);   e.setHours(0, 0, 0, 0);
       if (s.getTime() !== e.getTime()) {
@@ -68,7 +68,7 @@ export const applyLeave = async (req, res) => {
     const staff = await Staff.findOne({ userId: req.user.id });
     if (!staff) return res.status(404).json({ message: 'Staff profile not found' });
 
-    // 1. Check overlapping leave requests
+  
     const overlap = await Leave.findOne({
       staffId: staff._id,
       status: { $in: ['pending', 'approved'] },
@@ -77,7 +77,6 @@ export const applyLeave = async (req, res) => {
     });
     if (overlap) return res.status(400).json({ message: 'You already have a leave overlapping these dates.' });
 
-    // 2. Find ALL conflicting bookings within the leave date range
     const leaveStart = new Date(startDate); leaveStart.setHours(0, 0, 0, 0);
     const leaveEnd   = new Date(isHourly ? startDate : endDate); leaveEnd.setHours(23, 59, 59, 999);
 
@@ -87,9 +86,8 @@ export const applyLeave = async (req, res) => {
       status: { $in: ['pending', 'confirmed'] },
     }).populate('service', 'name').sort({ bookingDate: 1, bookingTime: 1 });
 
-    // For hourly leave: only bookings that overlap with the time window conflict
     const conflicting = allBookings.filter(bk => {
-      if (!isHourly) return true; // full-day leave: all bookings conflict
+      if (!isHourly) return true; 
       const bStart = toMins(bk.bookingTime);
       const bEnd   = bStart + (bk.duration || 60);
       const lStart = toMins(startTime);
@@ -98,7 +96,7 @@ export const applyLeave = async (req, res) => {
     });
 
     if (conflicting.length > 0) {
-      // Group by day
+     
       const byDay = {};
       for (const bk of conflicting) {
         const dk = new Date(bk.bookingDate).toDateString();
@@ -116,7 +114,7 @@ export const applyLeave = async (req, res) => {
       });
     }
 
-    // 3. Create leave
+    
     const leave = await Leave.create({
       staffId:   staff._id,
       type,
@@ -140,7 +138,6 @@ export const applyLeave = async (req, res) => {
 };
 
 
-// ─── STAFF: Get My Leaves ────────────────────────────────────────────────────
 export const getMyLeaves = async (req, res) => {
   try {
     const staff = await Staff.findOne({ userId: req.user.id });
@@ -153,7 +150,6 @@ export const getMyLeaves = async (req, res) => {
 };
 
 
-// ─── STAFF: Cancel Pending Leave ─────────────────────────────────────────────
 export const cancelLeave = async (req, res) => {
   try {
     const staff = await Staff.findOne({ userId: req.user.id });
@@ -174,7 +170,7 @@ export const cancelLeave = async (req, res) => {
 };
 
 
-// ─── STAFF: Edit Pending Leave ───────────────────────────────────────────────
+
 export const updateLeave = async (req, res) => {
   try {
     const staff = await Staff.findOne({ userId: req.user.id });
@@ -187,7 +183,7 @@ export const updateLeave = async (req, res) => {
 
     const { type, startDate, endDate, reason, isHourly, startTime, endTime } = req.body;
 
-    // Validate hourly fields
+  
     if (isHourly) {
       if (!startTime || !endTime)
         return res.status(400).json({ message: 'startTime and endTime are required for hourly leave.' });
@@ -196,7 +192,7 @@ export const updateLeave = async (req, res) => {
     }
 
     if (startDate && endDate) {
-      // Overlap check (exclude self)
+   
       const overlap = await Leave.findOne({
         _id:     { $ne: leave._id },
         staffId: staff._id,
@@ -207,7 +203,7 @@ export const updateLeave = async (req, res) => {
       if (overlap)
         return res.status(400).json({ message: 'Another leave already overlaps these dates.' });
 
-      // Check booking conflicts for new dates
+     
       const leaveStart = new Date(startDate); leaveStart.setHours(0, 0, 0, 0);
       const leaveEnd   = new Date(isHourly ? startDate : endDate); leaveEnd.setHours(23, 59, 59, 999);
 
@@ -262,7 +258,6 @@ export const updateLeave = async (req, res) => {
 };
 
 
-// ─── STAFF: Delete Leave ─────────────────────────────────────────────────────
 export const deleteLeave = async (req, res) => {
   try {
     const staff = await Staff.findOne({ userId: req.user.id });
@@ -284,7 +279,7 @@ export const deleteLeave = async (req, res) => {
 };
 
 
-// ─── ADMIN: Get All Leaves ───────────────────────────────────────────────────
+
 export const getAllLeaves = async (req, res) => {
   try {
     const filter = req.query.status ? { status: req.query.status } : {};
@@ -298,8 +293,7 @@ export const getAllLeaves = async (req, res) => {
 };
 
 
-// ─── ADMIN: Review Leave ──────────────────────────────────────────────────────
-// pending → approved/rejected | approved ↔ rejected (with adminNote)
+
 export const reviewLeave = async (req, res) => {
   try {
     const { status, adminNote } = req.body;
@@ -326,7 +320,7 @@ export const reviewLeave = async (req, res) => {
     leave.reviewedAt = new Date();
     await leave.save();
 
-    // ── Sync Staff.isOnLeave (only for full-day leaves) ───────────────────
+
     if (!leave.isHourly) {
       if (status === 'approved') {
         await Staff.findByIdAndUpdate(leave.staffId._id, {
@@ -339,7 +333,7 @@ export const reviewLeave = async (req, res) => {
           },
         });
       } else if (status === 'rejected' && previousStatus === 'approved') {
-        // Was approved → now rejected → check if any other active leave exists
+    
         const today = new Date(); today.setHours(0, 0, 0, 0);
         const otherActive = await Leave.findOne({
           staffId:   leave.staffId._id,
@@ -357,8 +351,7 @@ export const reviewLeave = async (req, res) => {
         }
       }
     }
-    // Note: hourly leaves do NOT touch isOnLeave — slot availability
-    // is checked live via the Leave model in bookingController.
+ 
 
     const { firstName, lastName, email } = leave.staffId.userId;
     try {
@@ -383,7 +376,7 @@ export const reviewLeave = async (req, res) => {
 };
 
 
-// ─── DEV UTIL: Delete All Leaves ─────────────────────────────────────────────
+
 export const deleteAllLeaves = async (req, res) => {
   const result = await Leave.deleteMany({});
   res.status(200).json({ message: `Deleted ${result.deletedCount} leave record(s).`, deletedCount: result.deletedCount });

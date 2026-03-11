@@ -43,15 +43,14 @@ const paymentSchema = new mongoose.Schema(
     processedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // admin manual refunds
   },
   {
-    timestamps: true, 
+    timestamps: true,
   }
 );
-
 
 paymentSchema.index({ booking: 1 });
 paymentSchema.index({ stripeTransactionId: 1 });
 paymentSchema.index({ status: 1 });
 
-
+const Payment = mongoose.model('Payment', paymentSchema);
 
 export default Payment;
