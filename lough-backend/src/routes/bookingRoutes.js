@@ -4,22 +4,25 @@ import {
   createBooking,
   getAllBookings,
   getMyBookings,
+  requestCancellation,
+  reviewCancellation,
+  updateBookingStatus,
 } from '../controllers/bookingController.js';
 import { verifyToken, verifyAdmin } from '../middleware/verifyToken.js';
 
 const bookingRouter = express.Router();
 
-// Public: available slots (customer must be logged in to book but can see slots)
+// Available slots
 bookingRouter.get('/available-slots', verifyToken, getAvailableSlots);
 
-// Customer: create booking (logged in)
-bookingRouter.post('/', verifyToken, createBooking);
+// Customer
+bookingRouter.get('/my',                   verifyToken,              getMyBookings);
+bookingRouter.post('/:id/cancel-request',  verifyToken,              requestCancellation);
 
-// Customer: my bookings
-bookingRouter.get('/my', verifyToken, getMyBookings);
-
-// Admin: all bookings + create on behalf
-bookingRouter.get('/', verifyToken, verifyAdmin, getAllBookings);
-bookingRouter.post('/admin', verifyToken, verifyAdmin, createBooking);
+// Admin
+bookingRouter.get('/',                     verifyToken, verifyAdmin,  getAllBookings);
+bookingRouter.post('/admin',               verifyToken, verifyAdmin,  createBooking);
+bookingRouter.post('/:id/cancel-review',   verifyToken, verifyAdmin,  reviewCancellation);
+bookingRouter.patch('/:id/status',         verifyToken, verifyAdmin,  updateBookingStatus);
 
 export default bookingRouter;

@@ -3,10 +3,10 @@ import Staff         from '../models/staff.js';
 import Service       from '../models/service.js';
 import Leave         from '../models/leave.js';
 import User          from '../models/user.js';
+import config        from '../config/index.js';
 import Googlebooking from '../models/googlebooking.js';
 import TempSlotLock  from '../models/tempSlotLock.js';
 import { google }    from 'googleapis';
-import config        from '../config/index.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 export const toMins   = (t) => { const [h,m] = t.split(':').map(Number); return h*60+m; };
@@ -397,3 +397,115 @@ function groupBy(arr, keyFn) {
     return acc;
   }, {});
 }
+
+// ─── POST /api/bookings/:id/cancel-request (customer) ────────────────────────
+export const requestCancellation = async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+
+    // Only the booking's owner can request cancellation
+    const user = await User.findById(req.user.id);
+    if (!user || user.email.toLowerCase() !== booking.customerEmail.toLowerCase())
+      return res.status(403).json({ message: 'Not authorised' });
+
+    if (['cancelled', 'completed', 'no-show'].includes(booking.status))
+      return res.status(400).json({ message: `Cannot cancel a ${booking.status} booking` });
+
+    if (booking.cancelRequestStatus === 'pending')
+      return res.status(400).json({ message: 'Cancellation request already pending' });
+
+    booking.cancelRequestedAt   = new Date();
+    booking.cancelRequestedBy   = req.user.id;
+    booking.cancelRequestReason = reason || '';
+    booking.cancelRequestStatus = 'pending';
+    await booking.save();
+
+    res.status(200).json({ message: 'Cancellation request submitted', booking });
+  } catch (err) {
+    console.error('[requestCancellation]', err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── POST /api/bookings/:id/cancel-review (admin) ────────────────────────────
+// body: { action: 'approve'|'reject', refundAmount: number (pence, optional), adminNote: string }
+export const reviewCancellation = async (req, res) => {
+  try {
+    const { action, refundAmount = 0, adminNote } = req.body;
+    if (!['approve', 'reject'].includes(action))
+      return res.status(400).json({ message: 'action must be approve or reject' });
+
+    const booking = await Booking.findById(req.params.id).populate('service');
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    if (booking.cancelRequestStatus !== 'pending')
+      return res.status(400).json({ message: 'No pending cancel request on this booking' });
+
+    if (action === 'reject') {
+      booking.cancelRequestStatus = 'rejected';
+      if (adminNote) booking.internalNotes = (booking.internalNotes ? booking.internalNotes + '\n' : '') + `[Cancel rejected] ${adminNote}`;
+      await booking.save();
+      return res.status(200).json({ message: 'Cancellation request rejected', booking });
+    }
+
+    // ── APPROVE ──────────────────────────────────────────────────────────────
+    // Optional Stripe refund
+    let stripeRefunded = false;
+    if (refundAmount > 0 && booking.stripePaymentIntentId) {
+      try {
+        const { default: Stripe } = await import('stripe');
+        const stripe = new Stripe(config.stripe.secretKey);
+        await stripe.refunds.create({
+          payment_intent: booking.stripePaymentIntentId,
+          amount: refundAmount,
+        });
+        stripeRefunded = true;
+      } catch (stripeErr) {
+        console.error('[Stripe refund]', stripeErr.message);
+        return res.status(502).json({ message: 'Stripe refund failed: ' + stripeErr.message });
+      }
+    }
+
+    booking.status               = 'cancelled';
+    booking.cancelRequestStatus  = 'approved';
+    booking.cancelledAt          = new Date();
+    booking.cancelledBy          = req.user.id;
+    booking.cancellationReason   = booking.cancelRequestReason;
+    if (stripeRefunded) {
+      booking.refundAmount   = refundAmount;
+      booking.refundedAt     = new Date();
+      booking.paymentStatus  = refundAmount >= booking.paidAmount ? 'refunded' : 'partially_refunded';
+      booking.paidAmount     = booking.paidAmount - refundAmount;
+    }
+    if (adminNote) booking.internalNotes = (booking.internalNotes ? booking.internalNotes + '\n' : '') + `[Cancel approved] ${adminNote}`;
+    await booking.save();
+
+    res.status(200).json({
+      message: stripeRefunded ? `Booking cancelled and £${(refundAmount/100).toFixed(2)} refunded` : 'Booking cancelled (no refund)',
+      booking,
+    });
+  } catch (err) {
+    console.error('[reviewCancellation]', err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── PATCH /api/bookings/:id/status (admin) ───────────────────────────────────
+export const updateBookingStatus = async (req, res) => {
+  try {
+    const { status, internalNotes } = req.body;
+    const allowed = ['pending', 'confirmed', 'completed', 'cancelled', 'no-show'];
+    if (!allowed.includes(status)) return res.status(400).json({ message: 'Invalid status' });
+    const booking = await Booking.findByIdAndUpdate(
+      req.params.id,
+      { status, ...(internalNotes && { internalNotes }) },
+      { new: true }
+    ).populate('service', 'name price duration')
+     .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName' } });
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    res.status(200).json(booking);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};

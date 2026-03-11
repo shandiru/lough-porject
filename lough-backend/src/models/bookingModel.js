@@ -82,10 +82,25 @@ const bookingSchema = new mongoose.Schema(
     consentFormCompleted: { type: Boolean, required: true, default: false },
     consentData:          { type: consentDataSchema },
 
-    // Cancellation
+    // Staff gender preference recorded at booking time
+    staffGenderPreference: {
+      type: String,
+      enum: ['any', 'male', 'female'],
+      default: 'any',
+    },
+
+    // Cancellation (admin-initiated or admin-approved)
     cancellationReason: { type: String },
     cancelledAt:        { type: Date },
     cancelledBy:        { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+
+    // Customer cancel request flow
+    cancelRequestedAt:     { type: Date },
+    cancelRequestedBy:     { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    cancelRequestReason:   { type: String },
+    cancelRequestStatus:   { type: String, enum: ['pending', 'approved', 'rejected'], default: null },
+    refundAmount:          { type: Number, default: 0 }, // pence
+    refundedAt:            { type: Date },
 
     // Meta
     bookingSource: {
