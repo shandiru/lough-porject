@@ -62,7 +62,7 @@ const refreshAllTokens = async () => {
 const syncAndCleanBookings = async () => {
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
-
+   console.log("start");
   try {
     
     await Googlebooking.deleteMany({ date: { $lt: todayStart } });
