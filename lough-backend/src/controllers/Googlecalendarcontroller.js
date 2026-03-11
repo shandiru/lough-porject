@@ -42,7 +42,7 @@ export const handleCallback = async (req, res) => {
     const { tokens } = await oauth2Client.getToken(code);
     oauth2Client.setCredentials(tokens);
 
-    // ── Step 1: Get the Google account's email ──
+  
     let googleEmail = null;
     try {
       const oauth2Api = google.oauth2({ version: 'v2', auth: oauth2Client });
@@ -52,21 +52,21 @@ export const handleCallback = async (req, res) => {
       return res.redirect(`${config.clientUrl}/dashboard/staff?gcal=error`);
     }
 
-    // ── Step 2: Get staff record + their app login email ──
+   
     const staff = await Staff.findOne({ userId });
     if (!staff) return res.redirect(`${config.clientUrl}/dashboard/staff?gcal=error`);
 
     const staffUser = await User.findById(userId);
     const staffEmail = staffUser?.email?.toLowerCase().trim();
 
-    // ── Step 3: Block if wrong Google account ──
+  
     if (!googleEmail || googleEmail !== staffEmail) {
       return res.redirect(
         `${config.clientUrl}/dashboard/staff?gcal=wrong_account&expected=${encodeURIComponent(staffEmail)}&got=${encodeURIComponent(googleEmail)}`
       );
     }
 
-    // ── Step 4: Get calendar ID ──
+  
     let calendarId = 'primary';
     try {
       const calendarApi = google.calendar({ version: 'v3', auth: oauth2Client });
@@ -76,7 +76,7 @@ export const handleCallback = async (req, res) => {
       calendarId = 'primary';
     }
 
-    // ── Step 5: Save tokens ──
+   
     staff.googleCalendarToken = {
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token || staff.googleCalendarToken?.refresh_token,

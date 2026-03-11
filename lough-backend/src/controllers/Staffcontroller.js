@@ -173,10 +173,10 @@ export const updateStaff = async (req, res) => {
     if (!user) return res.status(404).json({ message: 'User not found' });
      user.isActive = false;
      await user.save();
-    // Handle email change
+  
     let emailChangeInitiated = false;
     if (email && email.toLowerCase().trim() !== user.email.toLowerCase().trim()) {
-      // Check if new email is already taken by another active user
+     
       const emailTaken = await User.findOne({ email: email.toLowerCase().trim(), _id: { $ne: user._id } });
       if (emailTaken) {
         return res.status(400).json({ message: 'This email is already in use by another account.' });
@@ -185,7 +185,7 @@ export const updateStaff = async (req, res) => {
       const token = crypto.randomBytes(32).toString('hex');
       const expires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
-      // Store pending email on Staff, clear verifiedEmail so login is blocked
+      
       staff.pendingEmail = email.toLowerCase().trim();
       staff.emailChangeToken = token;
       staff.emailChangeTokenExpire = expires;
@@ -206,7 +206,7 @@ export const updateStaff = async (req, res) => {
       emailChangeInitiated = true;
     }
 
-    // Update user personal info (not email — email only changes after verification)
+    
     await User.findByIdAndUpdate(user._id, {
       ...(firstName && { firstName }),
       ...(lastName && { lastName }),
@@ -358,11 +358,11 @@ export const verifyEmailChange = async (req, res) => {
     const user = await User.findById(staff.userId._id);
     if (!user) return res.status(404).json({ message: 'Staff user not found.' });
       user.isActive = true;
-    // Apply the new email to User
+  
     user.email = staff.pendingEmail;
     await user.save();
 
-    // Mark verified, clear pending fields
+    
     staff.verifiedEmail = staff.pendingEmail;
     staff.pendingEmail = null;
     staff.emailChangeToken = null;

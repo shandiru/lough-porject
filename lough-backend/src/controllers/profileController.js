@@ -1,7 +1,7 @@
 import User from '../models/user.js';
 import Staff from '../models/staff.js';
 
-// ─── GET /api/profile/me ─────────────────────────────────────────
+
 export const getMyProfile = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -24,14 +24,13 @@ export const getMyProfile = async (req, res) => {
   }
 };
 
-// ─── PUT /api/profile/me ─────────────────────────────────────────
+
 export const updateMyProfile = async (req, res) => {
   try {
     const userId = req.user.id;
     const { firstName, lastName, phone, bio } = req.body;
 
-    // If image was uploaded, multer gives us req.file
-    // The filename is saved in /uploads/profiles/
+  
     const userUpdate = {};
     if (firstName)           userUpdate.firstName    = firstName;
     if (lastName)            userUpdate.lastName     = lastName;
@@ -43,7 +42,7 @@ export const updateMyProfile = async (req, res) => {
       runValidators: true,
     }).select('firstName lastName email phone gender profileImage role');
 
-    // Update Staff bio if role === staff
+  
     let staffData = null;
     if (updatedUser.role === 'staff' && bio !== undefined) {
       staffData = await Staff.findOneAndUpdate(
