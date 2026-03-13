@@ -509,3 +509,81 @@ export const updateBookingStatus = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+
+// ─── POST /api/bookings/:id/admin-cancel (admin direct cancel with optional refund) ──
+export const adminCancelBooking = async (req, res) => {
+  try {
+    const { refundAmount = 0, reason = '', internalNotes = '' } = req.body;
+    const booking = await Booking.findById(req.params.id)
+      .populate('service', 'name price duration')
+      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName' } });
+
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    if (['cancelled', 'completed', 'no-show'].includes(booking.status))
+      return res.status(400).json({ message: `Cannot cancel a ${booking.status} booking` });
+
+    let stripeRefunded = false;
+    if (refundAmount > 0 && booking.stripePaymentIntentId) {
+      try {
+        const stripe = (await import('stripe')).default(config.stripe.secretKey);
+        await stripe.refunds.create({ payment_intent: booking.stripePaymentIntentId, amount: refundAmount });
+        stripeRefunded = true;
+      } catch (stripeErr) {
+        console.error('[Stripe refund]', stripeErr.message);
+        return res.status(502).json({ message: 'Stripe refund failed: ' + stripeErr.message });
+      }
+    }
+
+    booking.status             = 'cancelled';
+    booking.cancelledAt        = new Date();
+    booking.cancelledBy        = req.user.id;
+    booking.cancellationReason = reason;
+    if (internalNotes) booking.internalNotes = internalNotes;
+    if (stripeRefunded) {
+      booking.refundAmount  = refundAmount;
+      booking.refundedAt    = new Date();
+      booking.paymentStatus = refundAmount >= booking.paidAmount ? 'refunded' : 'partially_refunded';
+      booking.paidAmount    = booking.paidAmount - refundAmount;
+    }
+    await booking.save();
+
+    res.status(200).json({
+      booking,
+      message: stripeRefunded
+        ? `Booking cancelled and £${(refundAmount / 100).toFixed(2)} refunded`
+        : 'Booking cancelled',
+    });
+  } catch (err) {
+    console.error('[adminCancelBooking]', err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── GET /api/bookings/calendar (admin calendar view) ────────────────────────
+export const getCalendarBookings = async (req, res) => {
+  try {
+    const { startDate, endDate, staffId } = req.query;
+    if (!startDate || !endDate) return res.status(400).json({ message: 'startDate and endDate required' });
+
+    const query = {
+      bookingDate: { $gte: new Date(startDate), $lte: new Date(endDate) },
+      status: { $nin: ['cancelled'] },
+    };
+    if (staffId) query.staffMember = staffId;
+
+    const bookings = await Booking.find(query)
+      .populate('service', 'name price duration color')
+      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName' } })
+      .sort({ bookingDate: 1, bookingTime: 1 });
+
+    // Also fetch google bookings for same range
+    const googleQuery = { date: { $gte: new Date(startDate), $lte: new Date(endDate) } };
+    if (staffId) googleQuery.staffId = staffId;
+    const googleBookings = await Googlebooking.find(googleQuery)
+      .populate({ path: 'staffId', populate: { path: 'userId', select: 'firstName lastName' } });
+
+    res.status(200).json({ bookings, googleBookings });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
