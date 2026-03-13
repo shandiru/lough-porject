@@ -49,4 +49,16 @@ app.use('/api/customer/auth', customerAuthRouter);
 
 app.get('/', (req, res) => res.json({ message: 'Lough Skin API running' }));
 
+
+// routes/cronRoutes.js or inside app.js
+app.get('/api/cron/sync', async (req, res) => {
+  try {
+    await syncAndCleanBookings();
+    
+    res.status(200).send('Cron Job Success!');
+  } catch (error) {
+    res.status(500).send('Error: ' + error.message);
+  }
+});
+
 export default app;
