@@ -171,7 +171,7 @@ export const updateStaff = async (req, res) => {
 
     const user = await User.findById(staff.userId._id);
     if (!user) return res.status(404).json({ message: 'User not found' });
-     user.isActive = false;
+    
      await user.save();
   
     let emailChangeInitiated = false;
@@ -180,6 +180,8 @@ export const updateStaff = async (req, res) => {
       const emailTaken = await User.findOne({ email: email.toLowerCase().trim(), _id: { $ne: user._id } });
       if (emailTaken) {
         return res.status(400).json({ message: 'This email is already in use by another account.' });
+      }else{
+         user.isActive = false;
       }
 
       const token = crypto.randomBytes(32).toString('hex');
