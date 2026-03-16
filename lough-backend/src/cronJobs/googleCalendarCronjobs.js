@@ -110,13 +110,17 @@ const syncAndCleanBookings = async () => {
               const endDate   = new Date(endRaw);
               if (startDate < todayStart) continue;
 
-              // ✅ FIX: extract date portion in Colombo TZ (not server local)
-              const dateOnlyStr = startDate.toLocaleDateString('en-CA', { timeZone: TZ }); // "YYYY-MM-DD"
+              // Use the event's own timezone (from Google) to extract date & time correctly.
+              // This is timezone-independent — works regardless of APP_TIMEZONE or server TZ.
+              // e.g. A Sri Lanka user books 9:00 AM IST → Google stores as 03:30 UTC
+              //      We read timeZone: "Asia/Colombo" from the event itself → extract "09:00" correctly
+              const eventTZ = event.start?.timeZone || event.end?.timeZone || TZ;
+
+              const dateOnlyStr = startDate.toLocaleDateString('en-CA', { timeZone: eventTZ }); // "YYYY-MM-DD"
               const dateOnly    = tzDayStart(dateOnlyStr);
 
-              // ✅ FIX: extract HH:MM in Colombo TZ (not server local toTimeString)
-              const startTime = startDate.toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
-              const endTime   = endDate.toLocaleTimeString('en-GB',   { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
+              const startTime = startDate.toLocaleTimeString('en-GB', { timeZone: eventTZ, hour: '2-digit', minute: '2-digit', hour12: false });
+              const endTime   = endDate.toLocaleTimeString('en-GB',   { timeZone: eventTZ, hour: '2-digit', minute: '2-digit', hour12: false });
 
               await Googlebooking.findOneAndUpdate(
                 {
