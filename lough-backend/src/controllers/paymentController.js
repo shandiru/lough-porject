@@ -7,7 +7,10 @@ import Service      from '../models/service.js';
 import Staff        from '../models/staff.js';
 import User         from '../models/user.js';
 import config       from '../config/index.js';
-import { addToGoogleCalendar, fromMins, toMins } from './bookingController.js';
+import { addToGoogleCalendar, fromMins, toMins, colomboDayStart } from './bookingController.js';
+
+// ─── Timezone ─────────────────────────────────────────────────────────────────
+const TZ = 'Asia/Colombo'; // Sri Lanka Standard Time (UTC+5:30)
 
 const stripe = new Stripe(config.stripe.secretKey);
 
@@ -43,17 +46,23 @@ const wrap = (headerHtml, bodyHtml) => `
     <p style="text-align:center;font-size:11px;color:#bbb;margin-top:20px">Lough Skin · Automated notification</p>
   </div>`;
 
+// ─── Format date in Colombo timezone for emails ───────────────────────────────
+// ✅ FIX: timeZone: TZ ensures date displays correctly in Sri Lanka time
+const formatDateColombo = (dateVal) =>
+  new Date(dateVal).toLocaleDateString('en-GB', {
+    timeZone: TZ,
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  });
+
 // ─── 1. CUSTOMER EMAIL ────────────────────────────────────────────────────────
-// Appointment info + payment they made. No staff contact, no internal data.
 const sendCustomerEmail = async (booking, service) => {
   try {
     const endTime = fromMins(toMins(booking.bookingTime) + service.duration);
     const paid    = (booking.paidAmount       / 100).toFixed(2);
     const balance = (booking.balanceRemaining / 100).toFixed(2);
     const total   = (booking.totalAmount      / 100).toFixed(2);
-    const date    = new Date(booking.bookingDate).toLocaleDateString('en-GB', {
-      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
-    });
+    // ✅ FIX: display date in Colombo TZ
+    const date    = formatDateColombo(booking.bookingDate);
 
     await mailer().sendMail({
       from:    `"Lough Skin" <${config.email.user}>`,
@@ -94,7 +103,6 @@ const sendCustomerEmail = async (booking, service) => {
 };
 
 // ─── 2. STAFF EMAIL ───────────────────────────────────────────────────────────
-// Appointment + client contact details ONLY. Zero payment info.
 const sendStaffEmail = async (booking, service, staffUser) => {
   try {
     if (!staffUser?.email) {
@@ -102,9 +110,8 @@ const sendStaffEmail = async (booking, service, staffUser) => {
       return;
     }
     const endTime = fromMins(toMins(booking.bookingTime) + service.duration);
-    const date    = new Date(booking.bookingDate).toLocaleDateString('en-GB', {
-      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
-    });
+    // ✅ FIX: Colombo TZ
+    const date    = formatDateColombo(booking.bookingDate);
 
     await mailer().sendMail({
       from:    `"Lough Skin" <${config.email.user}>`,
@@ -147,8 +154,6 @@ const sendStaffEmail = async (booking, service, staffUser) => {
 };
 
 // ─── 3. ADMIN EMAIL ───────────────────────────────────────────────────────────
-// Full details: appointment + customer + full payment breakdown.
-// Queries ALL users with role=admin from DB and sends to all of them.
 const sendAdminEmail = async (booking, service, staffUser) => {
   try {
     const admins = await User.find({ role: 'admin', isActive: true }).select('email firstName');
@@ -156,16 +161,15 @@ const sendAdminEmail = async (booking, service, staffUser) => {
       console.warn('[Email → Admin] No active admin users in DB, skipping.');
       return;
     }
-    const adminEmails = admins.map(a => a.email); // array — nodemailer accepts array
+    const adminEmails = admins.map(a => a.email);
 
     const endTime  = fromMins(toMins(booking.bookingTime) + service.duration);
     const paid     = (booking.paidAmount        / 100).toFixed(2);
     const balance  = (booking.balanceRemaining  / 100).toFixed(2);
     const deposit  = (booking.depositAmount     / 100).toFixed(2);
     const total    = (booking.totalAmount       / 100).toFixed(2);
-    const date     = new Date(booking.bookingDate).toLocaleDateString('en-GB', {
-      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
-    });
+    // ✅ FIX: Colombo TZ
+    const date     = formatDateColombo(booking.bookingDate);
     const staffName = staffUser ? staffUser.firstName + ' ' + staffUser.lastName : 'Unknown';
 
     const paymentBadge = booking.paymentType === 'full'
@@ -228,7 +232,6 @@ const sendAdminEmail = async (booking, service, staffUser) => {
 };
 
 // ─── Send all 3 emails in parallel ───────────────────────────────────────────
-// staff must already be .populate('userId', 'firstName lastName email') by caller
 const sendAllEmails = async (booking, service, staff) => {
   const staffUser = staff?.userId ?? null;
   await Promise.all([
@@ -238,11 +241,10 @@ const sendAllEmails = async (booking, service, staff) => {
   ]);
 };
 
-// ─── Shared booking creation logic (used by webhook + getSessionBooking) ──────
+// ─── Shared booking creation logic ───────────────────────────────────────────
 const createBookingFromSession = async (session) => {
   const m = session.metadata;
 
-  // Idempotency — don't create twice
   const existing = await Booking.findOne({ stripePaymentIntentId: session.payment_intent });
   if (existing) return existing;
 
@@ -266,7 +268,8 @@ const createBookingFromSession = async (session) => {
     customerNotes:   m.customerNotes    || undefined,
     service:         m.serviceId,
     staffMember:     m.staffId,
-    bookingDate:     new Date(m.bookingDate),
+    // ✅ FIX: store bookingDate as Colombo midnight
+    bookingDate:     colomboDayStart(m.bookingDate),
     bookingTime:     m.bookingTime,
     duration:        service.duration,
     status:          'pending',
@@ -300,13 +303,10 @@ const createBookingFromSession = async (session) => {
   // Release temp slot lock
   await TempSlotLock.deleteOne({ sessionId: session.id }).catch(() => {});
 
-  // Fetch staff with userId (needs email for staff email, name for admin email)
   const staff = await Staff.findById(m.staffId).populate('userId', 'firstName lastName email');
 
-  // Google Calendar (non-fatal)
   if (staff) await addToGoogleCalendar(staff, booking, service).catch(() => {});
 
-  // Send emails: customer + staff + all admins — in parallel
   await sendAllEmails(booking, service, staff);
 
   return booking;
@@ -383,8 +383,13 @@ export const createCheckoutSession = async (req, res) => {
       expires_at:  Math.floor(Date.now() / 1000) + 1800,
     });
 
+    // ✅ FIX: duration சேர்த்து lock create — correct slot blocking-க்கு அவசியம்
     await TempSlotLock.create({
-      staffId, serviceId, bookingDate, bookingTime,
+      staffId,
+      serviceId,
+      bookingDate,
+      bookingTime,
+      duration:  service.duration, // ✅ FIX
       sessionId: session.id,
       expiresAt: new Date(Date.now() + 30 * 60 * 1000),
     });
