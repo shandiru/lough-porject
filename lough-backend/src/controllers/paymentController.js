@@ -8,9 +8,10 @@ import Staff        from '../models/staff.js';
 import User         from '../models/user.js';
 import config       from '../config/index.js';
 import { addToGoogleCalendar, fromMins, toMins, colomboDayStart } from './bookingController.js';
+import { TZ } from '../utils/timezone.js';
 
 // ─── Timezone ─────────────────────────────────────────────────────────────────
-const TZ = 'Asia/Colombo'; // Sri Lanka Standard Time (UTC+5:30)
+// Timezone is configured via APP_TIMEZONE in .env (see src/utils/timezone.js)
 
 const stripe = new Stripe(config.stripe.secretKey);
 
@@ -46,8 +47,7 @@ const wrap = (headerHtml, bodyHtml) => `
     <p style="text-align:center;font-size:11px;color:#bbb;margin-top:20px">Lough Skin · Automated notification</p>
   </div>`;
 
-// ─── Format date in Colombo timezone for emails ───────────────────────────────
-// ✅ FIX: timeZone: TZ ensures date displays correctly in Sri Lanka time
+// ─── Format date in configured timezone for emails ──────────────────────────
 const formatDateColombo = (dateVal) =>
   new Date(dateVal).toLocaleDateString('en-GB', {
     timeZone: TZ,

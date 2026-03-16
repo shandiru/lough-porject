@@ -10,7 +10,8 @@ import TempSlotLock  from '../models/tempSlotLock.js';
 import { google }    from 'googleapis';
 
 // ─── Timezone ─────────────────────────────────────────────────────────────────
-const TZ = 'Asia/Colombo'; // Sri Lanka Standard Time (UTC+5:30)
+// Timezone is now configured via APP_TIMEZONE in .env (see src/utils/timezone.js)
+import { TZ, tzDayStart, tzDayEnd, dayName as tzDayName, formatDate as tzFormatDate } from '../utils/timezone.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 export const toMins   = (t) => { const [h,m] = t.split(':').map(Number); return h*60+m; };
@@ -18,11 +19,11 @@ export const fromMins = (m) => `${Math.floor(m/60).toString().padStart(2,'0')}:$
 
 /**
  * Build a Date representing midnight (00:00:00.000) at the START of a given
- * "YYYY-MM-DD" string in Sri Lanka time.
+ * "YYYY-MM-DD" string in the configured timezone.
  * Stored as UTC in MongoDB — day-boundary queries are correct.
  */
-export const colomboDayStart = (dateStr) => new Date(`${dateStr}T00:00:00+05:30`);
-export const colomboDayEnd   = (dateStr) => new Date(`${dateStr}T23:59:59.999+05:30`);
+export const colomboDayStart = (dateStr) => tzDayStart(dateStr);
+export const colomboDayEnd   = (dateStr) => tzDayEnd(dateStr);
 
 const BUFFER = 15; // minutes buffer AFTER a booking ends before next can start
 
@@ -64,7 +65,7 @@ export const addToGoogleCalendar = async (staff, booking, service) => {
           `Email: ${booking.customerEmail}`,
           booking.customerNotes ? `Notes: ${booking.customerNotes}` : '',
         ].filter(Boolean).join('\n'),
-        // ✅ FIX: was 'Europe/London' → now Asia/Colombo
+        // timeZone uses TZ from .env (APP_TIMEZONE)
         start: { dateTime: startStr, timeZone: TZ },
         end:   { dateTime: endStr,   timeZone: TZ },
         colorId: '2',
@@ -207,10 +208,9 @@ export const getAvailableSlots = async (req, res) => {
     }
 
     const duration = service.duration;
-    const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+    // Parse day-of-week at noon in configured timezone (avoids midnight UTC boundary issues)
+    const dayName  = tzDayName(date);
 
-    // ✅ FIX: parse day-of-week at noon Colombo time (avoids midnight UTC boundary issues)
-    const dayName  = dayNames[new Date(`${date}T12:00:00+05:30`).getDay()];
 
     // ✅ FIX: day boundaries in Colombo time
     const dayStart = colomboDayStart(date);
@@ -300,10 +300,8 @@ export const getAvailableSlots = async (req, res) => {
 
 // ─── isSlotAvailable (single-staff DB check) ─────────────────────────────────
 export const isSlotAvailable = async (staffId, date, startMins, endMins) => {
-  const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-
-  // ✅ FIX: noon Colombo time for correct day-of-week
-  const dayName  = dayNames[new Date(`${date}T12:00:00+05:30`).getDay()];
+  // Noon in configured timezone for correct day-of-week
+  const dayName  = tzDayName(date);
   const dayStart = colomboDayStart(date);
   const dayEnd   = colomboDayEnd(date);
   const dateStr  = typeof date === 'string' ? date : new Date(date).toLocaleDateString('en-CA', { timeZone: TZ });

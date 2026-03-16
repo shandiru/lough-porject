@@ -8,6 +8,11 @@ const config = {
   userlUrl: process.env.USER_URL,
   serverUrl: process.env.SERVER_URL,
 
+  // ─── Timezone ─────────────────────────────────────────────────────────────
+  // Change APP_TIMEZONE in your .env file to update the timezone.
+  // Examples: 'Europe/London', 'Asia/Colombo', 'America/New_York'
+  timezone: process.env.APP_TIMEZONE || 'Europe/London',
+
   adminSecretKey: process.env.ADMIN_SECRET_KEY,
 
   jwt: {
