@@ -47,6 +47,6 @@ app.use('/api/bookings',      bookingRouter);
 app.use('/api/payments',      paymentRouter);
 app.use('/api/customer/auth', customerAuthRouter);
 
-app.get('/', (req, res) => res.json({ message: 'Lough Skin API running' }));
+app.get('/', (req, res) => res.json({ message: 'Lough Skin API running phase 3 start' }));
 
 export default app;
