@@ -84,7 +84,6 @@ export const addToGoogleCalendar = async (staff, booking, service) => {
  * Non-fatal — errors are logged but never bubble up.
  */
 export const deleteFromGoogleCalendar = async (staff, googleCalendarEventId) => {
-   console.log("review cancel  phase 4")
   try {
     if (!googleCalendarEventId) {
       console.log('[Google Cal Delete] Skipped — no googleCalendarEventId on booking');
@@ -467,7 +466,6 @@ export const requestCancellation = async (req, res) => {
 
 // ─── POST /api/bookings/:id/cancel-review (admin) ────────────────────────────
 export const reviewCancellation = async (req, res) => {
-  console.log("review cancel ");
   try {
     const { action, refundAmount = 0, adminNote } = req.body;
     if (!['approve', 'reject'].includes(action))
@@ -485,17 +483,20 @@ export const reviewCancellation = async (req, res) => {
       return res.status(200).json({ message: 'Cancellation request rejected', booking });
     }
 
+    // ── Stripe refund (optional — failure does NOT block cancel or gcal delete) ─
     let stripeRefundId = null;
+    let stripeErrMsg   = null;
     if (refundAmount > 0 && booking.stripePaymentIntentId) {
-       console.log("review cancel phase 2")
       try {
         const { default: Stripe } = await import('stripe');
         const stripe = new Stripe(config.stripe.secretKey);
         const refund = await stripe.refunds.create({ payment_intent: booking.stripePaymentIntentId, amount: refundAmount });
         stripeRefundId = refund.id;
+        console.log('[Stripe refund] Success:', stripeRefundId);
       } catch (stripeErr) {
-        console.error('[Stripe refund]', stripeErr.message);
-        return res.status(502).json({ message: 'Stripe refund failed: ' + stripeErr.message });
+        // Log but DO NOT return — booking cancel + gcal delete must still happen
+        stripeErrMsg = stripeErr.message;
+        console.error('[Stripe refund] Failed (continuing with cancel):', stripeErrMsg);
       }
     }
 
@@ -515,7 +516,7 @@ export const reviewCancellation = async (req, res) => {
     if (adminNote) booking.internalNotes = (booking.internalNotes ? booking.internalNotes + '\n' : '') + `[Cancel approved] ${adminNote}`;
     await booking.save();
 
-    // ✅ FIX: refund record Payment collection-ல store
+    // ── Payment refund record ─────────────────────────────────────────────────
     if (stripeRefunded) {
       await Payment.create({
         booking:             booking._id,
@@ -528,18 +529,20 @@ export const reviewCancellation = async (req, res) => {
       }).catch(err => console.error('[Payment refund record]', err.message));
     }
 
-    // ✅ FIX: Google Calendar event delete பண்ணு
+    // ── Google Calendar event delete (always runs, even if refund failed) ─────
     if (booking.googleCalendarEventId) {
-       console.log("review cancel phase3 ")
+      console.log('[Google Cal Delete] Attempting for eventId:', booking.googleCalendarEventId);
       const staffId = booking.staffMember?._id ?? booking.staffMember;
       const staff   = await Staff.findById(staffId).catch(() => null);
       if (staff) await deleteFromGoogleCalendar(staff, booking.googleCalendarEventId);
     }
 
-    res.status(200).json({
-      message: stripeRefunded ? `Booking cancelled and £${(refundAmount/100).toFixed(2)} refunded` : 'Booking cancelled (no refund)',
-      booking,
-    });
+    // ── Response ──────────────────────────────────────────────────────────────
+    let message = 'Booking cancelled (no refund)';
+    if (stripeRefunded) message = `Booking cancelled and £${(refundAmount/100).toFixed(2)} refunded`;
+    if (stripeErrMsg)   message = `Booking cancelled but refund failed: ${stripeErrMsg}`;
+
+    res.status(200).json({ message, booking });
   } catch (err) {
     console.error('[reviewCancellation]', err);
     res.status(500).json({ message: err.message });
@@ -585,15 +588,18 @@ export const adminCancelBooking = async (req, res) => {
     if (['cancelled', 'completed', 'no-show'].includes(booking.status))
       return res.status(400).json({ message: `Cannot cancel a ${booking.status} booking` });
 
+    // ── Stripe refund (optional — failure does NOT block cancel or gcal delete) ─
     let stripeRefundId = null;
+    let stripeErrMsg   = null;
     if (refundAmount > 0 && booking.stripePaymentIntentId) {
       try {
         const stripe = (await import('stripe')).default(config.stripe.secretKey);
         const refund = await stripe.refunds.create({ payment_intent: booking.stripePaymentIntentId, amount: refundAmount });
         stripeRefundId = refund.id;
+        console.log('[Stripe refund] Success:', stripeRefundId);
       } catch (stripeErr) {
-        console.error('[Stripe refund]', stripeErr.message);
-        return res.status(502).json({ message: 'Stripe refund failed: ' + stripeErr.message });
+        stripeErrMsg = stripeErr.message;
+        console.error('[Stripe refund] Failed (continuing with cancel):', stripeErrMsg);
       }
     }
 
@@ -612,7 +618,7 @@ export const adminCancelBooking = async (req, res) => {
     }
     await booking.save();
 
-    // ✅ FIX: refund record Payment collection-ல store
+    // ── Payment refund record ─────────────────────────────────────────────────
     if (stripeRefunded) {
       await Payment.create({
         booking:             booking._id,
@@ -625,21 +631,19 @@ export const adminCancelBooking = async (req, res) => {
       }).catch(err => console.error('[Payment refund record]', err.message));
     }
 
-    // ✅ FIX: Google Calendar event delete பண்ணு
-    // booking.staffMember is already a populated Staff doc OR raw ObjectId —
-    // always do a fresh findById so googleCalendarToken is guaranteed to be present
+    // ── Google Calendar event delete (always runs, even if refund failed) ─────
     if (booking.googleCalendarEventId) {
+      console.log('[Google Cal Delete] Attempting for eventId:', booking.googleCalendarEventId);
       const staffId = booking.staffMember?._id ?? booking.staffMember;
       const staff   = await Staff.findById(staffId).catch(() => null);
       if (staff) await deleteFromGoogleCalendar(staff, booking.googleCalendarEventId);
     }
 
-    res.status(200).json({
-      booking,
-      message: stripeRefunded
-        ? `Booking cancelled and £${(refundAmount / 100).toFixed(2)} refunded`
-        : 'Booking cancelled',
-    });
+    let message = 'Booking cancelled';
+    if (stripeRefunded) message = `Booking cancelled and £${(refundAmount / 100).toFixed(2)} refunded`;
+    if (stripeErrMsg)   message = `Booking cancelled but refund failed: ${stripeErrMsg}`;
+
+    res.status(200).json({ booking, message });
   } catch (err) {
     console.error('[adminCancelBooking]', err);
     res.status(500).json({ message: err.message });
@@ -671,6 +675,32 @@ export const getCalendarBookings = async (req, res) => {
 
     res.status(200).json({ bookings, googleBookings });
   } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── GET /api/bookings/staff/my (staff — their own bookings) ─────────────────
+/**
+ * Staff member-ஓட own bookings fetch பண்ணும்.
+ * req.user.id = User._id (JWT-ல இருக்கு)
+ * Booking.staffMember = Staff._id  ← இரண்டும் different!
+ * Fix: User._id → Staff._id → Bookings
+ */
+export const getStaffBookings = async (req, res) => {
+  try {
+    // Step 1: User._id → Staff record find பண்ணு
+    const staff = await Staff.findOne({ userId: req.user.id });
+    if (!staff) return res.status(404).json({ message: 'Staff profile not found' });
+
+    // Step 2: Staff._id-ல bookings fetch பண்ணு
+    const bookings = await Booking.find({ staffMember: staff._id })
+      .populate('service', 'name price duration color')
+      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName profileImage' } })
+      .sort({ bookingDate: -1 });
+
+    res.status(200).json(bookings);
+  } catch (err) {
+    console.error('[getStaffBookings]', err);
     res.status(500).json({ message: err.message });
   }
 };

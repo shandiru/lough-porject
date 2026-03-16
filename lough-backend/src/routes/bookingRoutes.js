@@ -4,25 +4,29 @@ import {
   createBooking,
   getAllBookings,
   getMyBookings,
+  getStaffBookings,
   requestCancellation,
   reviewCancellation,
   updateBookingStatus,
   adminCancelBooking,
   getCalendarBookings,
 } from '../controllers/bookingController.js';
-import { verifyToken, verifyAdmin } from '../middleware/verifyToken.js';
+import { verifyToken, verifyAdmin, verifyStaff } from '../middleware/verifyToken.js';
 
 const bookingRouter = express.Router();
 
-// Available slots
+// Available slots (public with token)
 bookingRouter.get('/available-slots', verifyToken, getAvailableSlots);
 
 // Calendar view (admin)
 bookingRouter.get('/calendar',             verifyToken, verifyAdmin,  getCalendarBookings);
 
 // Customer
-bookingRouter.get('/my',                   verifyToken,              getMyBookings);
-bookingRouter.post('/:id/cancel-request',  verifyToken,              requestCancellation);
+bookingRouter.get('/my',                   verifyToken,               getMyBookings);
+bookingRouter.post('/:id/cancel-request',  verifyToken,               requestCancellation);
+
+// ✅ FIX: Staff — own bookings (User._id → Staff._id → Bookings)
+bookingRouter.get('/staff/my',             verifyToken, verifyStaff,  getStaffBookings);
 
 // Admin
 bookingRouter.get('/',                     verifyToken, verifyAdmin,  getAllBookings);
