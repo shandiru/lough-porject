@@ -552,19 +552,33 @@ export const reviewCancellation = async (req, res) => {
 // ─── PATCH /api/bookings/:id/status (admin) ───────────────────────────────────
 export const updateBookingStatus = async (req, res) => {
   try {
-    const { status, internalNotes } = req.body;
+    const { status, internalNotes, balanceReceived } = req.body;
     const allowed = ['pending', 'confirmed', 'completed', 'cancelled', 'no-show'];
     if (!allowed.includes(status)) return res.status(400).json({ message: 'Invalid status' });
 
-    const booking = await Booking.findByIdAndUpdate(
-      req.params.id,
-      { status, ...(internalNotes && { internalNotes }) },
-      { new: true }
-    ).populate('service', 'name price duration')
-     .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName' } });
+    const booking = await Booking.findById(req.params.id)
+      .populate('service', 'name price duration')
+      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName' } });
     if (!booking) return res.status(404).json({ message: 'Booking not found' });
 
-    // ✅ FIX: status 'cancelled' ஆனா Google Calendar event delete பண்ணு
+    booking.status = status;
+    if (internalNotes) booking.internalNotes = internalNotes;
+
+    // ── When marking as completed, record any balance payment collected in-person ─
+    if (status === 'completed' && balanceReceived !== undefined) {
+      const balancePence = Math.round(parseFloat(balanceReceived) * 100);
+      if (balancePence > 0) {
+        booking.paidAmount       = (booking.paidAmount || 0) + balancePence;
+        booking.balanceRemaining = Math.max((booking.balanceRemaining || 0) - balancePence, 0);
+        if (booking.balanceRemaining === 0) {
+          booking.paymentStatus = 'paid';
+        }
+      }
+    }
+
+    await booking.save();
+
+    // ── status 'cancelled' ஆனா Google Calendar event delete பண்ணு ──────────
     if (status === 'cancelled' && booking.googleCalendarEventId) {
       const staff = await Staff.findById(booking.staffMember._id || booking.staffMember).catch(() => null);
       if (staff) await deleteFromGoogleCalendar(staff, booking.googleCalendarEventId);
