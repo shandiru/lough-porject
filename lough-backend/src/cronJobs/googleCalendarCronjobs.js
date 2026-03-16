@@ -73,11 +73,13 @@ const refreshAllTokens = async () => {
   }
 };
 
-
 const syncAndCleanBookings = async () => {
-  // ✅ FIX: use Colombo-aware today boundaries (not server UTC midnight)
-  const { start: todayStart, todayStr } = colomboTodayBounds();
-  console.log(`[Sync] Colombo today: ${todayStr} | UTC boundary: ${todayStart.toISOString()}`);
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const thirtyOneDaysLater = new Date();
+  thirtyOneDaysLater.setDate(todayStart.getDate() + 31);
+  thirtyOneDaysLater.setHours(23, 59, 59, 999);
 
   try {
     await Googlebooking.deleteMany({ date: { $lt: todayStart } });
@@ -85,89 +87,60 @@ const syncAndCleanBookings = async () => {
     const connectedStaff = await Staff.find({
       'googleCalendarToken.refresh_token': { $exists: true, $ne: null },
       'googleCalendarSyncStatus.status': 'connected',
-    }).select('_id googleCalendarToken googleCalendarId');
-
-    if (!connectedStaff.length) return;
+    });
 
     await Promise.allSettled(
       connectedStaff.map(async (staff) => {
-        try {
-          const oauth2Client = createOAuthClient();
-          oauth2Client.setCredentials({
-            access_token: staff.googleCalendarToken.access_token,
-            refresh_token: staff.googleCalendarToken.refresh_token,
-            expiry_date: staff.googleCalendarToken.expiry_date,
-          });
+        const oauth2Client = createOAuthClient();
+        oauth2Client.setCredentials(staff.googleCalendarToken);
+        const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
-          const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+        let allEvents = [];
+        let pageToken = null;
 
+        
+        do {
           const eventsResponse = await calendar.events.list({
             calendarId: staff.googleCalendarId || 'primary',
             timeMin: todayStart.toISOString(),
+            timeMax: thirtyOneDaysLater.toISOString(),
             singleEvents: true,
             orderBy: 'startTime',
-            maxResults: 100,
+            maxResults: 250,
+            pageToken: pageToken, 
           });
 
-          const googleEvents = eventsResponse.data.items || [];
-          console.log(googleEvents);
+          allEvents = allEvents.concat(eventsResponse.data.items || []);
+          pageToken = eventsResponse.data.nextPageToken; 
+        } while (pageToken); 
 
-          for (const event of googleEvents) {
-            try {
-              const startRaw = event.start?.dateTime || event.start?.date;
-              const endRaw   = event.end?.dateTime   || event.end?.date;
-              if (!startRaw || !endRaw) continue;
+        console.log(`[Sync] Staff ${staff._id}: Total events fetched: ${allEvents.length}`);
 
-              const startDate = new Date(startRaw);
-              const endDate   = new Date(endRaw);
-              if (startDate < todayStart) continue;
+        for (const event of allEvents) {
+         
+          const startRaw = event.start?.dateTime || event.start?.date;
+          if (!startRaw) continue;
+          
+          const startDate = new Date(startRaw);
+          const dateOnly = new Date(startDate);
+          dateOnly.setHours(0, 0, 0, 0);
 
-              // ✅ FIX: extract date portion in Colombo TZ (not server local)
-              const dateOnlyStr = startDate.toLocaleDateString('en-CA', { timeZone: TZ }); // "YYYY-MM-DD"
-              const dateOnly    = new Date(`${dateOnlyStr}T00:00:00+05:30`);
-
-              // ✅ FIX: extract HH:MM in Colombo TZ (not server local toTimeString)
-              const startTime = startDate.toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
-              const endTime   = endDate.toLocaleTimeString('en-GB',   { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
-
-              await Googlebooking.findOneAndUpdate(
-                {
-                  staffId: staff._id,
-                  googleCalendarEventId: event.id
-                },
-                {
-                  staffId: staff._id,
-                  date: dateOnly,
-                  startTime,
-                  endTime,
-                  googleCalendarEventId: event.id,
-                  googleCalendarSynced: true,
-                },
-                {
-                  upsert: true,
-                  returnDocument: 'after',
-                  setDefaultsOnInsert: true
-                }
-              );
-            } catch (storeErr) {
-              if (storeErr.code !== 11000) {
-                console.error(`[Sync] Error storing event ${event.id}:`, storeErr.message);
-              }
-            }
-          }
-
-          await Staff.findByIdAndUpdate(staff._id, {
-            'googleCalendarSyncStatus.lastSync': new Date(),
-          }, { returnDocument: 'after' });
-
-        } catch (staffErr) {
-          console.error(`[Sync] Failed for staff ${staff._id}:`, staffErr.message);
+          await Googlebooking.findOneAndUpdate(
+            { staffId: staff._id, googleCalendarEventId: event.id },
+            {
+              staffId: staff._id,
+              date: dateOnly,
+              startTime: startDate.toTimeString().split(' ')[0].substring(0, 5),
+              googleCalendarEventId: event.id,
+              googleCalendarSynced: true,
+            },
+            { upsert: true, returnDocument: 'after' }
+          );
         }
       })
     );
-    console.log('[Sync] Calendar sync completed.');
   } catch (error) {
-    console.error('[Sync] Fatal Job Error:', error.message);
+    console.error('[Sync] Fatal Error:', error.message);
   }
 };
 
