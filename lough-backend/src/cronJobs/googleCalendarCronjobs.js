@@ -5,20 +5,8 @@ import Googlebooking from '../models/googlebooking.js';
 import config from '../config/index.js';
 
 // ─── Timezone ─────────────────────────────────────────────────────────────────
-const TZ = 'Asia/Colombo'; // Sri Lanka Standard Time (UTC+5:30)
-
-/**
- * Get today's midnight boundaries in Colombo time.
- * Prevents the UTC-midnight shift issue where server's new Date()
- * would return the wrong calendar day for Sri Lanka users.
- */
-const colomboTodayBounds = () => {
-  // Get today's date string in Colombo TZ ("YYYY-MM-DD")
-  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
-  const start = new Date(`${todayStr}T00:00:00+05:30`);
-  const end   = new Date(`${todayStr}T23:59:59.999+05:30`);
-  return { start, end, todayStr };
-};
+// Timezone is configured via APP_TIMEZONE in .env (see src/utils/timezone.js)
+import { TZ, todayBounds as colomboTodayBounds, tzDayStart } from '../utils/timezone.js';
 
 const createOAuthClient = () =>
   new google.auth.OAuth2(
@@ -76,7 +64,7 @@ const refreshAllTokens = async () => {
 
 const syncAndCleanBookings = async () => {
   // ✅ FIX: use Colombo-aware today boundaries (not server UTC midnight)
-  const { start: todayStart, todayStr } = colomboTodayBounds();
+  const { start: todayStart, dateStr: todayStr } = colomboTodayBounds();
   console.log(`[Sync] Colombo today: ${todayStr} | UTC boundary: ${todayStart.toISOString()}`);
 
   try {
@@ -124,7 +112,7 @@ const syncAndCleanBookings = async () => {
 
               // ✅ FIX: extract date portion in Colombo TZ (not server local)
               const dateOnlyStr = startDate.toLocaleDateString('en-CA', { timeZone: TZ }); // "YYYY-MM-DD"
-              const dateOnly    = new Date(`${dateOnlyStr}T00:00:00+05:30`);
+              const dateOnly    = tzDayStart(dateOnlyStr);
 
               // ✅ FIX: extract HH:MM in Colombo TZ (not server local toTimeString)
               const startTime = startDate.toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });

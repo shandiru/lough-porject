@@ -1,19 +1,17 @@
 import cron from 'node-cron';
 import Staff from '../models/staff.js';
 import Leave from '../models/leave.js';
+import { todayBounds } from '../utils/timezone.js';
 
 // ─── Timezone ─────────────────────────────────────────────────────────────────
-const TZ = 'Asia/Colombo'; // Sri Lanka Standard Time (UTC+5:30)
+// Timezone is configured via APP_TIMEZONE in .env (see src/utils/timezone.js)
 
 const updateStaffLeaveStatus = async () => {
-  // ✅ FIX: Build today's range in Colombo time (not UTC).
-  // Without this, a server running at e.g. 20:00 UTC = 01:30 AM Colombo next day
-  // would use the WRONG calendar date for leave checks.
-  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: TZ }); // "YYYY-MM-DD"
-  const todayStart = new Date(`${todayStr}T00:00:00+05:30`);
-  const todayEnd   = new Date(`${todayStr}T23:59:59.999+05:30`);
+  // Build today's range in configured timezone (not server UTC).
+  // Change APP_TIMEZONE in .env to switch timezone without touching code.
+  const { start: todayStart, end: todayEnd, dateStr: todayStr } = todayBounds();
 
-  console.log(`[Leave Cron] Colombo today: ${todayStr} | UTC range: ${todayStart.toISOString()} → ${todayEnd.toISOString()}`);
+  console.log(`[Leave Cron] Today (${process.env.APP_TIMEZONE || 'Europe/London'}): ${todayStr} | UTC range: ${todayStart.toISOString()} → ${todayEnd.toISOString()}`);
 
   try {
     const activeLeaves = await Leave.find({
