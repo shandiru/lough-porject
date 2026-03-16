@@ -75,11 +75,18 @@ const refreshAllTokens = async () => {
 
 
 const syncAndCleanBookings = async () => {
-  // ✅ FIX: use Colombo-aware today boundaries (not server UTC midnight)
-  const { start: todayStart, todayStr } = colomboTodayBounds();
-  console.log(`[Sync] Colombo today: ${todayStr} | UTC boundary: ${todayStart.toISOString()}`);
+  
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0); 
+
+  const thirtyOneDaysLater = new Date();
+  thirtyOneDaysLater.setDate(todayStart.getDate() + 31);
+  thirtyOneDaysLater.setHours(23, 59, 59, 999);
+
+  console.log(`[Sync] Local Sync: ${todayStart.toLocaleString()} to ${thirtyOneDaysLater.toLocaleString()}`);
 
   try {
+    
     await Googlebooking.deleteMany({ date: { $lt: todayStart } });
 
     const connectedStaff = await Staff.find({
@@ -101,17 +108,18 @@ const syncAndCleanBookings = async () => {
 
           const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
+          
           const eventsResponse = await calendar.events.list({
             calendarId: staff.googleCalendarId || 'primary',
             timeMin: todayStart.toISOString(),
+            timeMax: thirtyOneDaysLater.toISOString(),
             singleEvents: true,
             orderBy: 'startTime',
-            maxResults: 100,
+            maxResults: 250, 
           });
 
           const googleEvents = eventsResponse.data.items || [];
-          console.log(googleEvents);
-
+           console.log(eventsResponse.data.items);
           for (const event of googleEvents) {
             try {
               const startRaw = event.start?.dateTime || event.start?.date;
@@ -122,14 +130,15 @@ const syncAndCleanBookings = async () => {
               const endDate   = new Date(endRaw);
               if (startDate < todayStart) continue;
 
-              // ✅ FIX: extract date portion in Colombo TZ (not server local)
-              const dateOnlyStr = startDate.toLocaleDateString('en-CA', { timeZone: TZ }); // "YYYY-MM-DD"
-              const dateOnly    = new Date(`${dateOnlyStr}T00:00:00+05:30`);
+           
+              const startTime = startDate.toTimeString().split(' ')[0].substring(0, 5);
+              const endTime   = endDate.toTimeString().split(' ')[0].substring(0, 5);
 
-              // ✅ FIX: extract HH:MM in Colombo TZ (not server local toTimeString)
-              const startTime = startDate.toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
-              const endTime   = endDate.toLocaleTimeString('en-GB',   { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
+            
+              const dateOnly = new Date(startDate);
+              dateOnly.setHours(0, 0, 0, 0);
 
+           
               await Googlebooking.findOneAndUpdate(
                 {
                   staffId: staff._id,
@@ -145,17 +154,18 @@ const syncAndCleanBookings = async () => {
                 },
                 {
                   upsert: true,
-                  returnDocument: 'after',
+                  returnDocument: 'after', 
                   setDefaultsOnInsert: true
                 }
               );
             } catch (storeErr) {
               if (storeErr.code !== 11000) {
-                console.error(`[Sync] Error storing event ${event.id}:`, storeErr.message);
+                console.error(`[Sync] Store error for ${event.id}:`, storeErr.message);
               }
             }
           }
 
+          
           await Staff.findByIdAndUpdate(staff._id, {
             'googleCalendarSyncStatus.lastSync': new Date(),
           }, { returnDocument: 'after' });
@@ -165,14 +175,13 @@ const syncAndCleanBookings = async () => {
         }
       })
     );
-    console.log('[Sync] Calendar sync completed.');
+    console.log('[Sync] Success: 31 days synced using local time.');
   } catch (error) {
     console.error('[Sync] Fatal Job Error:', error.message);
   }
 };
 
-
 export const startGoogleCalendarCrons = () => {
   cron.schedule('0 * * * *', refreshAllTokens);
-  cron.schedule('*/15 * * * *', syncAndCleanBookings);
+  cron.schedule('*/1 * * * *', syncAndCleanBookings);
 };
