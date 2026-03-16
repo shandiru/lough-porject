@@ -2,21 +2,24 @@ import cron from 'node-cron';
 import Staff from '../models/staff.js';
 import Leave from '../models/leave.js';
 
+// ─── Timezone ─────────────────────────────────────────────────────────────────
+const TZ = 'Asia/Colombo'; // Sri Lanka Standard Time (UTC+5:30)
+
 const updateStaffLeaveStatus = async () => {
-  // Build today's range in UTC to match how MongoDB stores the dates
-  const todayStart = new Date();
-  todayStart.setUTCHours(0, 0, 0, 0);
+  // ✅ FIX: Build today's range in Colombo time (not UTC).
+  // Without this, a server running at e.g. 20:00 UTC = 01:30 AM Colombo next day
+  // would use the WRONG calendar date for leave checks.
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: TZ }); // "YYYY-MM-DD"
+  const todayStart = new Date(`${todayStr}T00:00:00+05:30`);
+  const todayEnd   = new Date(`${todayStr}T23:59:59.999+05:30`);
 
-  const todayEnd = new Date();
-  todayEnd.setUTCHours(23, 59, 59, 999);
-
-  console.log('[Leave Cron] Today UTC range:', todayStart.toISOString(), '→', todayEnd.toISOString());
+  console.log(`[Leave Cron] Colombo today: ${todayStr} | UTC range: ${todayStart.toISOString()} → ${todayEnd.toISOString()}`);
 
   try {
     const activeLeaves = await Leave.find({
-      status: 'approved',
-      startDate: { $lte: todayEnd   },   // leave started on or before end of today
-      endDate:   { $gte: todayStart },   // leave ends on or after start of today
+      status:    'approved',
+      startDate: { $lte: todayEnd   },
+      endDate:   { $gte: todayStart },
     });
 
     console.log('[Leave Cron] Active leaves found:', activeLeaves.length);
@@ -57,7 +60,6 @@ const updateStaffLeaveStatus = async () => {
 };
 
 export const startStaffLeaveCron = () => {
-  // Run every 10 seconds
   cron.schedule('*/10 * * * * *', () => {
     console.log('[Leave Cron] Running staff leave status update...');
     updateStaffLeaveStatus();

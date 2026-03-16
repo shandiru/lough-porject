@@ -276,13 +276,27 @@ export const resendInvite = async (req, res) => {
     }
 
     const token = crypto.randomBytes(32).toString('hex');
+    const expires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+    // Case 1: Email change pending — resend verify-email-change link
+    if (staff.pendingEmail) {
+      staff.emailChangeToken = token;
+      staff.emailChangeTokenExpire = expires;
+      await staff.save();
+
+      await sendEmailChangeVerification(staff.pendingEmail, token, user.firstName);
+
+      return res.status(200).json({ message: 'Email change verification link resent!' });
+    }
+
+    // Case 2: New staff — resend setup-password invite link
     user.emailVerifyToken = token;
-    user.emailVerifyTokenExpire = Date.now() + 5 * 60 * 1000;
+    user.emailVerifyTokenExpire = Date.now() + 24 * 60 * 60 * 1000; // extended to 24h
     await user.save();
 
     await sendInviteEmail(user.email, token);
 
-    res.status(200).json({ message: 'Invite resent!' });
+    res.status(200).json({ message: 'Setup invite resent!' });
   } catch (err) {
     res.status(500).json({ message: 'Error resending invite', error: err.message });
   }

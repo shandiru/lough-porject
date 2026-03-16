@@ -3,14 +3,26 @@ import Staff         from '../models/staff.js';
 import Service       from '../models/service.js';
 import Leave         from '../models/leave.js';
 import User          from '../models/user.js';
+import Payment       from '../models/paymentModel.js';
 import config        from '../config/index.js';
 import Googlebooking from '../models/googlebooking.js';
 import TempSlotLock  from '../models/tempSlotLock.js';
 import { google }    from 'googleapis';
 
+// ─── Timezone ─────────────────────────────────────────────────────────────────
+const TZ = 'Asia/Colombo'; // Sri Lanka Standard Time (UTC+5:30)
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 export const toMins   = (t) => { const [h,m] = t.split(':').map(Number); return h*60+m; };
 export const fromMins = (m) => `${Math.floor(m/60).toString().padStart(2,'0')}:${(m%60).toString().padStart(2,'0')}`;
+
+/**
+ * Build a Date representing midnight (00:00:00.000) at the START of a given
+ * "YYYY-MM-DD" string in Sri Lanka time.
+ * Stored as UTC in MongoDB — day-boundary queries are correct.
+ */
+export const colomboDayStart = (dateStr) => new Date(`${dateStr}T00:00:00+05:30`);
+export const colomboDayEnd   = (dateStr) => new Date(`${dateStr}T23:59:59.999+05:30`);
 
 const BUFFER = 15; // minutes buffer AFTER a booking ends before next can start
 
@@ -35,7 +47,9 @@ export const addToGoogleCalendar = async (staff, booking, service) => {
     });
 
     const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
-    const dateStr  = new Date(booking.bookingDate).toISOString().split('T')[0];
+
+    // bookingDate is stored as UTC in Mongo — render it in Colombo TZ for the date string
+    const dateStr  = new Date(booking.bookingDate).toLocaleDateString('en-CA', { timeZone: TZ });
     const startStr = `${dateStr}T${booking.bookingTime}:00`;
     const endStr   = `${dateStr}T${fromMins(toMins(booking.bookingTime) + service.duration)}:00`;
 
@@ -50,8 +64,9 @@ export const addToGoogleCalendar = async (staff, booking, service) => {
           `Email: ${booking.customerEmail}`,
           booking.customerNotes ? `Notes: ${booking.customerNotes}` : '',
         ].filter(Boolean).join('\n'),
-        start: { dateTime: startStr, timeZone: 'Europe/London' },
-        end:   { dateTime: endStr,   timeZone: 'Europe/London' },
+        // ✅ FIX: was 'Europe/London' → now Asia/Colombo
+        start: { dateTime: startStr, timeZone: TZ },
+        end:   { dateTime: endStr,   timeZone: TZ },
         colorId: '2',
       },
     });
@@ -62,14 +77,60 @@ export const addToGoogleCalendar = async (staff, booking, service) => {
   }
 };
 
-// ─── isSlotAvailable ──────────────────────────────────────────────────────────
+// ─── deleteFromGoogleCalendar helper ─────────────────────────────────────────
 /**
- * Fast check — all DB data is pre-fetched by the caller (getAvailableSlots)
- * and passed in. No DB calls inside this function = parallel-safe.
- *
- * Buffer rule: next booking can start at (prevEnd + BUFFER).
- * So 9–10am booked → 10:15 is the earliest next slot (10:00 + 15min buffer).
- * Trying to book at exactly 10:00 would fail (within buffer of previous end).
+ * Deletes a Google Calendar event for a staff member.
+ * Called when a booking is cancelled (any flow).
+ * Non-fatal — errors are logged but never bubble up.
+ */
+export const deleteFromGoogleCalendar = async (staff, googleCalendarEventId) => {
+   console.log("review cancel  phase 4")
+  try {
+    if (!googleCalendarEventId) {
+      console.log('[Google Cal Delete] Skipped — no googleCalendarEventId on booking');
+      return;
+    }
+    if (!staff.googleCalendarToken?.access_token || !staff.googleCalendarToken?.refresh_token) {
+      console.log('[Google Cal Delete] Skipped — staff has no calendar token, staffId:', staff._id);
+      return;
+    }
+    if (staff.googleCalendarSyncStatus?.status !== 'connected') {
+      console.log('[Google Cal Delete] Skipped — calendar not connected, status:', staff.googleCalendarSyncStatus?.status, 'staffId:', staff._id);
+      return;
+    }
+
+    const oauth2Client = new google.auth.OAuth2(
+      config.google.clientId,
+      config.google.clientSecret,
+      config.google.redirectUri,
+    );
+    oauth2Client.setCredentials({
+      access_token:  staff.googleCalendarToken.access_token,
+      refresh_token: staff.googleCalendarToken.refresh_token,
+      expiry_date:   staff.googleCalendarToken.expiry_date,
+    });
+
+    const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+    await calendar.events.delete({
+      calendarId: staff.googleCalendarId || 'primary',
+      eventId:    googleCalendarEventId,
+    });
+    console.log('[Google Cal] Event deleted:', googleCalendarEventId);
+  } catch (err) {
+    // 410 Gone = already deleted — not an error
+    if (err.code === 410 || err.status === 410) {
+      console.log('[Google Cal] Event already gone:', googleCalendarEventId);
+    } else {
+      console.error('[Google Cal] Failed to delete event:', err.message);
+    }
+  }
+};
+
+// ─── isSlotFreeSync ───────────────────────────────────────────────────────────
+/**
+ * Buffer rule: next booking can start only AFTER (prevEnd + BUFFER).
+ * Example: 9:00–9:30 booked (30min) → 9:30 + 15min buffer = 9:45 earliest next slot.
+ * Buffer applies AFTER end only — NOT before booking starts.
  */
 const isSlotFreeSync = (startMins, endMins, {
   daySchedule,
@@ -85,55 +146,50 @@ const isSlotFreeSync = (startMins, endMins, {
   const workEnd   = toMins(daySchedule.end   || '17:00');
   if (startMins < workStart || endMins > workEnd) return false;
 
-  // 2. Break windows
+  // 2. Breaks
   for (const brk of (daySchedule.breaks || [])) {
     const bS = toMins(brk.start), bE = toMins(brk.end);
     if (startMins < bE && endMins > bS) return false;
   }
 
-  // 3. Leave (full-day already filtered out before calling; check hourly)
+  // 3. Hourly leave
   for (const lv of approvedLeaves) {
-    if (!lv.isHourly) return false; // full-day leave
+    if (!lv.isHourly) return false;
     const lS = toMins(lv.startTime), lE = toMins(lv.endTime);
     if (startMins < lE && endMins > lS) return false;
   }
 
-  // 4. Existing bookings + buffer
-  //    A booking [bStart, bEnd] blocks [(bStart - BUFFER), (bEnd + BUFFER)]
-  //    so new slot must not overlap that blocked window.
+  // 4. Existing bookings + post-end buffer
+  // ✅ FIX: endMins > bS (not bS - BUFFER — no pre-booking buffer)
   for (const bk of existingBookings) {
     const bS = toMins(bk.bookingTime);
     const bE = bS + bk.duration;
-    if (startMins < bE + BUFFER && endMins > bS - BUFFER) return false;
+    if (startMins < bE + BUFFER && endMins > bS) return false;
   }
 
-  // 5. Google Calendar bookings + buffer
+  // 5. Google Calendar bookings + post-end buffer
+  // ✅ FIX: endMins > gbS (not gbS - BUFFER)
   for (const gb of googleBookings) {
     const gbS = toMins(gb.startTime), gbE = toMins(gb.endTime);
-    if (startMins < gbE + BUFFER && endMins > gbS - BUFFER) return false;
+    if (startMins < gbE + BUFFER && endMins > gbS) return false;
   }
 
-  // 6. TempSlotLocks (active payment holds)
+  // 6. TempSlotLocks + post-end buffer
+  // ✅ FIX: use lock.duration for real end time; no pre-lock buffer
   const dateStr = typeof bookingDate === 'string'
     ? bookingDate
-    : new Date(bookingDate).toISOString().split('T')[0];
+    : new Date(bookingDate).toLocaleDateString('en-CA', { timeZone: TZ });
   for (const lock of tempLocks) {
+    if (lock.bookingDate !== dateStr) continue;
     const lS = toMins(lock.bookingTime);
-    // A lock blocks just that exact slot start — treat as BUFFER-width block
-    if (startMins < lS + BUFFER && endMins > lS - BUFFER) return false;
+    const lE = lS + (lock.duration || 0);
+    if (startMins < lE + BUFFER && endMins > lS) return false;
   }
 
   return true;
 };
 
 // ─── GET /api/bookings/available-slots ───────────────────────────────────────
-/**
- * OPTIMISED — all DB queries run in parallel per staff member,
- * then slot generation is purely synchronous.
- *
- * Query params:
- *   serviceId, date, customerGender, staffGenderPreference
- */
 export const getAvailableSlots = async (req, res) => {
   try {
     const { serviceId, date, customerGender, staffGenderPreference } = req.query;
@@ -145,7 +201,6 @@ export const getAvailableSlots = async (req, res) => {
     if (!service || !service.isActive)
       return res.status(404).json({ message: 'Service not found' });
 
-    // Service-level gender restriction
     if (service.genderRestriction !== 'all') {
       const allowed = service.genderRestriction === 'male-only' ? 'male' : 'female';
       if (customerGender && customerGender !== allowed)
@@ -154,28 +209,27 @@ export const getAvailableSlots = async (req, res) => {
 
     const duration = service.duration;
     const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-    const dayName  = dayNames[new Date(date).getDay()];
-    const dayStart = new Date(date); dayStart.setHours(0,0,0,0);
-    const dayEnd   = new Date(date); dayEnd.setHours(23,59,59,999);
-    const dateStr  = date; // "YYYY-MM-DD"
 
-    // Load all eligible staff (skills match + user active)
+    // ✅ FIX: parse day-of-week at noon Colombo time (avoids midnight UTC boundary issues)
+    const dayName  = dayNames[new Date(`${date}T12:00:00+05:30`).getDay()];
+
+    // ✅ FIX: day boundaries in Colombo time
+    const dayStart = colomboDayStart(date);
+    const dayEnd   = colomboDayEnd(date);
+    const dateStr  = date;
+
     const allStaff = await Staff.find({ skills: serviceId })
       .populate('userId', 'firstName lastName profileImage gender isActive');
 
-    // Filter staff by gender rules BEFORE hitting DB for slots
     const eligibleStaff = allStaff.filter(staff => {
       const u = staff.userId;
       if (!u?.isActive) return false;
       if (staff.isOnLeave) return false;
-      // Staff won't serve this customer gender
       if (staff.genderRestriction === 'male-only'   && customerGender !== 'male')   return false;
       if (staff.genderRestriction === 'female-only' && customerGender !== 'female') return false;
-      // Customer wants specific staff gender
       if (staffGenderPreference && staffGenderPreference !== 'any') {
         if (u.gender !== staffGenderPreference) return false;
       }
-      // Must be a working day
       const ds = staff.workingHours?.[dayName];
       if (!ds?.isWorking) return false;
       return true;
@@ -183,46 +237,26 @@ export const getAvailableSlots = async (req, res) => {
 
     if (eligibleStaff.length === 0) return res.status(200).json([]);
 
-    // ── Fetch all DB data IN PARALLEL for all eligible staff ─────────────────
     const staffIds = eligibleStaff.map(s => s._id);
 
     const [allLeaves, allBookings, allGoogleBookings, allTempLocks] = await Promise.all([
-      Leave.find({
-        staffId:   { $in: staffIds },
-        status:    'approved',
-        startDate: { $lte: dayEnd },
-        endDate:   { $gte: dayStart },
-      }),
-      Booking.find({
-        staffMember: { $in: staffIds },
-        bookingDate: { $gte: dayStart, $lte: dayEnd },
-        status:      { $nin: ['cancelled'] },
-      }),
-      Googlebooking.find({
-        staffId: { $in: staffIds },
-        date:    { $gte: dayStart, $lte: dayEnd },
-      }),
-      TempSlotLock.find({
-        staffId:     { $in: staffIds },
-        bookingDate: dateStr,
-        expiresAt:   { $gt: new Date() },
-      }),
+      Leave.find({ staffId: { $in: staffIds }, status: 'approved', startDate: { $lte: dayEnd }, endDate: { $gte: dayStart } }),
+      Booking.find({ staffMember: { $in: staffIds }, bookingDate: { $gte: dayStart, $lte: dayEnd }, status: { $nin: ['cancelled'] } }),
+      Googlebooking.find({ staffId: { $in: staffIds }, date: { $gte: dayStart, $lte: dayEnd } }),
+      TempSlotLock.find({ staffId: { $in: staffIds }, bookingDate: dateStr, expiresAt: { $gt: new Date() } }),
     ]);
 
-    // Index by staffId for O(1) lookup
-    const leavesByStaff   = groupBy(allLeaves,         l  => l.staffId.toString());
-    const bookingsByStaff = groupBy(allBookings,        b  => b.staffMember.toString());
-    const googleByStaff   = groupBy(allGoogleBookings,  g  => g.staffId.toString());
-    const locksByStaff    = groupBy(allTempLocks,        l  => l.staffId.toString());
+    const leavesByStaff   = groupBy(allLeaves,         l => l.staffId.toString());
+    const bookingsByStaff = groupBy(allBookings,        b => b.staffMember.toString());
+    const googleByStaff   = groupBy(allGoogleBookings,  g => g.staffId.toString());
+    const locksByStaff    = groupBy(allTempLocks,        l => l.staffId.toString());
 
-    // ── Build result synchronously ────────────────────────────────────────────
     const result = [];
 
     for (const staff of eligibleStaff) {
       const sid = staff._id.toString();
       const u   = staff.userId;
 
-      // Skip if full-day leave exists
       const staffLeaves = leavesByStaff[sid] || [];
       if (staffLeaves.some(lv => !lv.isHourly)) continue;
 
@@ -265,13 +299,15 @@ export const getAvailableSlots = async (req, res) => {
   }
 };
 
-// ─── isSlotAvailable (single-staff DB check — used for booking creation guard) ─
+// ─── isSlotAvailable (single-staff DB check) ─────────────────────────────────
 export const isSlotAvailable = async (staffId, date, startMins, endMins) => {
   const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-  const dayName  = dayNames[new Date(date).getDay()];
-  const dayStart = new Date(date); dayStart.setHours(0,0,0,0);
-  const dayEnd   = new Date(date); dayEnd.setHours(23,59,59,999);
-  const dateStr  = typeof date === 'string' ? date : new Date(date).toISOString().split('T')[0];
+
+  // ✅ FIX: noon Colombo time for correct day-of-week
+  const dayName  = dayNames[new Date(`${date}T12:00:00+05:30`).getDay()];
+  const dayStart = colomboDayStart(date);
+  const dayEnd   = colomboDayEnd(date);
+  const dateStr  = typeof date === 'string' ? date : new Date(date).toLocaleDateString('en-CA', { timeZone: TZ });
 
   const staff = await Staff.findById(staffId);
   if (!staff || staff.isOnLeave) return false;
@@ -293,7 +329,7 @@ export const isSlotAvailable = async (staffId, date, startMins, endMins) => {
   });
 };
 
-// ─── POST /api/bookings/admin (admin direct booking — no Stripe) ──────────────
+// ─── POST /api/bookings/admin ─────────────────────────────────────────────────
 export const createBooking = async (req, res) => {
   try {
     const {
@@ -326,7 +362,8 @@ export const createBooking = async (req, res) => {
       customerAddress, customerGender, customerNotes,
       service:     serviceId,
       staffMember: staffId,
-      bookingDate: new Date(bookingDate),
+      // ✅ FIX: store as Colombo midnight
+      bookingDate: colomboDayStart(bookingDate),
       bookingTime,
       duration:    service.duration,
       status:      'confirmed',
@@ -405,7 +442,6 @@ export const requestCancellation = async (req, res) => {
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ message: 'Booking not found' });
 
-    // Only the booking's owner can request cancellation
     const user = await User.findById(req.user.id);
     if (!user || user.email.toLowerCase() !== booking.customerEmail.toLowerCase())
       return res.status(403).json({ message: 'Not authorised' });
@@ -430,8 +466,8 @@ export const requestCancellation = async (req, res) => {
 };
 
 // ─── POST /api/bookings/:id/cancel-review (admin) ────────────────────────────
-// body: { action: 'approve'|'reject', refundAmount: number (pence, optional), adminNote: string }
 export const reviewCancellation = async (req, res) => {
+  console.log("review cancel ");
   try {
     const { action, refundAmount = 0, adminNote } = req.body;
     if (!['approve', 'reject'].includes(action))
@@ -449,23 +485,21 @@ export const reviewCancellation = async (req, res) => {
       return res.status(200).json({ message: 'Cancellation request rejected', booking });
     }
 
-    // ── APPROVE ──────────────────────────────────────────────────────────────
-    // Optional Stripe refund
-    let stripeRefunded = false;
+    let stripeRefundId = null;
     if (refundAmount > 0 && booking.stripePaymentIntentId) {
+       console.log("review cancel phase 2")
       try {
         const { default: Stripe } = await import('stripe');
         const stripe = new Stripe(config.stripe.secretKey);
-        await stripe.refunds.create({
-          payment_intent: booking.stripePaymentIntentId,
-          amount: refundAmount,
-        });
-        stripeRefunded = true;
+        const refund = await stripe.refunds.create({ payment_intent: booking.stripePaymentIntentId, amount: refundAmount });
+        stripeRefundId = refund.id;
       } catch (stripeErr) {
         console.error('[Stripe refund]', stripeErr.message);
         return res.status(502).json({ message: 'Stripe refund failed: ' + stripeErr.message });
       }
     }
+
+    const stripeRefunded = !!stripeRefundId;
 
     booking.status               = 'cancelled';
     booking.cancelRequestStatus  = 'approved';
@@ -480,6 +514,27 @@ export const reviewCancellation = async (req, res) => {
     }
     if (adminNote) booking.internalNotes = (booking.internalNotes ? booking.internalNotes + '\n' : '') + `[Cancel approved] ${adminNote}`;
     await booking.save();
+
+    // ✅ FIX: refund record Payment collection-ல store
+    if (stripeRefunded) {
+      await Payment.create({
+        booking:             booking._id,
+        amount:              refundAmount,
+        type:                'refund',
+        status:              'success',
+        stripeTransactionId: stripeRefundId,
+        processedAt:         new Date(),
+        processedBy:         req.user.id,
+      }).catch(err => console.error('[Payment refund record]', err.message));
+    }
+
+    // ✅ FIX: Google Calendar event delete பண்ணு
+    if (booking.googleCalendarEventId) {
+       console.log("review cancel phase3 ")
+      const staffId = booking.staffMember?._id ?? booking.staffMember;
+      const staff   = await Staff.findById(staffId).catch(() => null);
+      if (staff) await deleteFromGoogleCalendar(staff, booking.googleCalendarEventId);
+    }
 
     res.status(200).json({
       message: stripeRefunded ? `Booking cancelled and £${(refundAmount/100).toFixed(2)} refunded` : 'Booking cancelled (no refund)',
@@ -497,6 +552,7 @@ export const updateBookingStatus = async (req, res) => {
     const { status, internalNotes } = req.body;
     const allowed = ['pending', 'confirmed', 'completed', 'cancelled', 'no-show'];
     if (!allowed.includes(status)) return res.status(400).json({ message: 'Invalid status' });
+
     const booking = await Booking.findByIdAndUpdate(
       req.params.id,
       { status, ...(internalNotes && { internalNotes }) },
@@ -504,13 +560,20 @@ export const updateBookingStatus = async (req, res) => {
     ).populate('service', 'name price duration')
      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName' } });
     if (!booking) return res.status(404).json({ message: 'Booking not found' });
+
+    // ✅ FIX: status 'cancelled' ஆனா Google Calendar event delete பண்ணு
+    if (status === 'cancelled' && booking.googleCalendarEventId) {
+      const staff = await Staff.findById(booking.staffMember._id || booking.staffMember).catch(() => null);
+      if (staff) await deleteFromGoogleCalendar(staff, booking.googleCalendarEventId);
+    }
+
     res.status(200).json(booking);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-// ─── POST /api/bookings/:id/admin-cancel (admin direct cancel with optional refund) ──
+// ─── POST /api/bookings/:id/admin-cancel ─────────────────────────────────────
 export const adminCancelBooking = async (req, res) => {
   try {
     const { refundAmount = 0, reason = '', internalNotes = '' } = req.body;
@@ -522,17 +585,19 @@ export const adminCancelBooking = async (req, res) => {
     if (['cancelled', 'completed', 'no-show'].includes(booking.status))
       return res.status(400).json({ message: `Cannot cancel a ${booking.status} booking` });
 
-    let stripeRefunded = false;
+    let stripeRefundId = null;
     if (refundAmount > 0 && booking.stripePaymentIntentId) {
       try {
         const stripe = (await import('stripe')).default(config.stripe.secretKey);
-        await stripe.refunds.create({ payment_intent: booking.stripePaymentIntentId, amount: refundAmount });
-        stripeRefunded = true;
+        const refund = await stripe.refunds.create({ payment_intent: booking.stripePaymentIntentId, amount: refundAmount });
+        stripeRefundId = refund.id;
       } catch (stripeErr) {
         console.error('[Stripe refund]', stripeErr.message);
         return res.status(502).json({ message: 'Stripe refund failed: ' + stripeErr.message });
       }
     }
+
+    const stripeRefunded = !!stripeRefundId;
 
     booking.status             = 'cancelled';
     booking.cancelledAt        = new Date();
@@ -546,6 +611,28 @@ export const adminCancelBooking = async (req, res) => {
       booking.paidAmount    = booking.paidAmount - refundAmount;
     }
     await booking.save();
+
+    // ✅ FIX: refund record Payment collection-ல store
+    if (stripeRefunded) {
+      await Payment.create({
+        booking:             booking._id,
+        amount:              refundAmount,
+        type:                'refund',
+        status:              'success',
+        stripeTransactionId: stripeRefundId,
+        processedAt:         new Date(),
+        processedBy:         req.user.id,
+      }).catch(err => console.error('[Payment refund record]', err.message));
+    }
+
+    // ✅ FIX: Google Calendar event delete பண்ணு
+    // booking.staffMember is already a populated Staff doc OR raw ObjectId —
+    // always do a fresh findById so googleCalendarToken is guaranteed to be present
+    if (booking.googleCalendarEventId) {
+      const staffId = booking.staffMember?._id ?? booking.staffMember;
+      const staff   = await Staff.findById(staffId).catch(() => null);
+      if (staff) await deleteFromGoogleCalendar(staff, booking.googleCalendarEventId);
+    }
 
     res.status(200).json({
       booking,
@@ -565,8 +652,9 @@ export const getCalendarBookings = async (req, res) => {
     const { startDate, endDate, staffId } = req.query;
     if (!startDate || !endDate) return res.status(400).json({ message: 'startDate and endDate required' });
 
+    // ✅ FIX: boundaries in Colombo time
     const query = {
-      bookingDate: { $gte: new Date(startDate), $lte: new Date(endDate) },
+      bookingDate: { $gte: colomboDayStart(startDate), $lte: colomboDayEnd(endDate) },
       status: { $nin: ['cancelled'] },
     };
     if (staffId) query.staffMember = staffId;
@@ -576,8 +664,7 @@ export const getCalendarBookings = async (req, res) => {
       .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName' } })
       .sort({ bookingDate: 1, bookingTime: 1 });
 
-    // Also fetch google bookings for same range
-    const googleQuery = { date: { $gte: new Date(startDate), $lte: new Date(endDate) } };
+    const googleQuery = { date: { $gte: colomboDayStart(startDate), $lte: colomboDayEnd(endDate) } };
     if (staffId) googleQuery.staffId = staffId;
     const googleBookings = await Googlebooking.find(googleQuery)
       .populate({ path: 'staffId', populate: { path: 'userId', select: 'firstName lastName' } });
