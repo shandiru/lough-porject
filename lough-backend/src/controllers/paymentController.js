@@ -305,7 +305,14 @@ const createBookingFromSession = async (session) => {
 
   const staff = await Staff.findById(m.staffId).populate('userId', 'firstName lastName email');
 
-  if (staff) await addToGoogleCalendar(staff, booking, service).catch(() => {});
+  // ✅ FIX: gcalEventId save பண்ணணும் — இல்லன்னா cancel-ல delete பண்ண முடியாது
+  if (staff) {
+    const gcalEventId = await addToGoogleCalendar(staff, booking, service).catch(() => null);
+    if (gcalEventId) {
+      booking.googleCalendarEventId = gcalEventId;
+      await booking.save();
+    }
+  }
 
   await sendAllEmails(booking, service, staff);
 
