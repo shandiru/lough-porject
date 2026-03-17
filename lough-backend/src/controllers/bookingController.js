@@ -338,6 +338,31 @@ export const createBooking = async (req, res) => {
       consentData,
     } = req.body;
 
+    // ── Validate booking date — must be tomorrow or later ──────────────────
+    if (bookingDate) {
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
+      if (bookingDate <= todayStr) {
+        return res.status(400).json({
+          message: 'Booking date must be at least 1 day in the future. Same-day bookings are not accepted.',
+        });
+      }
+    }
+
+    // ── Validate UK phone number ───────────────────────────────────────────
+    if (customerPhone) {
+      const stripped = customerPhone.replace(/[\s\-().]/g, '');
+      const isUKPhone =
+        /^07\d{9}$/.test(stripped) ||
+        /^\+447\d{9}$/.test(stripped) ||
+        /^0[1-3]\d{8,9}$/.test(stripped) ||
+        /^\+44[1-3]\d{8,9}$/.test(stripped);
+      if (!isUKPhone) {
+        return res.status(400).json({
+          message: 'Please provide a valid UK phone number (e.g. 07700 900000).',
+        });
+      }
+    }
+
     const service = await Service.findById(serviceId);
     if (!service || !service.isActive)
       return res.status(404).json({ message: 'Service not found' });

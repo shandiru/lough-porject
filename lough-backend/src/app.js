@@ -16,6 +16,7 @@ import paymentRouter  from './routes/paymentRoutes.js';
 import { stripeWebhook } from './controllers/paymentController.js';
 import config from './config/index.js';
 import { startGoogleCalendarCrons} from "../src/cronJobs/googleCalendarCronjobs.js"
+import { startReminderCron } from "../src/cronJobs/reminderCron.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
@@ -34,6 +35,7 @@ app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
 startGoogleCalendarCrons();
+startReminderCron();
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 app.use('/api/auth',          authRoutes);
