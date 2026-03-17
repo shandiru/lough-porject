@@ -7,7 +7,7 @@ import User        from '../models/user.js';
 import config      from '../config/index.js';
 import { TZ }      from '../utils/timezone.js';
 import { fromMins, toMins } from '../controllers/bookingController.js';
-
+import moment from 'moment-timezone';
 // ─── Mailer ───────────────────────────────────────────────────────────────────
 const mailer = () =>
   nodemailer.createTransport({
@@ -201,5 +201,5 @@ export const startReminderCron = () => {
     timezone: TZ 
   });
 
-  console.log(`[Reminder Cron] Scheduled — runs daily at 14:25 (${TZ}).`);
+  console.log(`[Reminder Cron] Scheduled — runs daily  (${TZ}).`);
 };
