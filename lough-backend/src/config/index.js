@@ -14,6 +14,7 @@ const config = {
   timezone: process.env.APP_TIMEZONE || 'Europe/London',
 
   adminSecretKey: process.env.ADMIN_SECRET_KEY,
+  adminRefundKey: process.env.ADMIN_REFUND_KEY,
 
   jwt: {
     accessSecret: process.env.JWT_ACCESSTOEKEN_KEY,

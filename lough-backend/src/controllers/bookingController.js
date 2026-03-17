@@ -591,7 +591,18 @@ export const updateBookingStatus = async (req, res) => {
 // ─── POST /api/bookings/:id/admin-cancel ─────────────────────────────────────
 export const adminCancelBooking = async (req, res) => {
   try {
-    const { refundAmount = 0, reason = '', internalNotes = '' } = req.body;
+    const { refundAmount = 0, reason = '', internalNotes = '', refundKey = '' } = req.body;
+
+    // ── Refund key guard — required when a refund amount is specified ─────────
+    if (refundAmount > 0) {
+      const expectedKey = config.adminRefundKey;
+      if (!expectedKey) {
+        return res.status(500).json({ message: 'ADMIN_REFUND_KEY is not configured on the server.' });
+      }
+      if (refundKey !== expectedKey) {
+        return res.status(403).json({ message: 'Invalid refund key. Refund not authorised.' });
+      }
+    }
     const booking = await Booking.findById(req.params.id)
       .populate('service', 'name price duration')
       .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName' } });
