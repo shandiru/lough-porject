@@ -30,44 +30,42 @@ export const dayStart = (dateStr) => {
 };
 
 /**
- * Robust dayStart: uses Intl.DateTimeFormat to compute midnight in TZ correctly
- * regardless of the offset (handles half-hour offsets like +05:30 too).
+ * Returns a Date representing 00:00:00.000 at the START of a "YYYY-MM-DD"
+ * string in the configured timezone — stored as UTC in MongoDB.
+ *
+ * Uses Temporal-safe approach: always appends 'Z' to avoid server-local-TZ
+ * ambiguity (e.g. server running in IST would misparse "T00:00:00" without Z).
+ *
+ * Works for any IANA timezone including half-hour offsets (Asia/Colombo +05:30).
  */
 export const tzDayStart = (dateStr) => {
-  // Parse as local noon first to avoid any date-boundary ambiguity
-  const ref = new Date(`${dateStr}T12:00:00Z`);
+  // Step 1: Use noon UTC as a reference — guaranteed to land on the right
+  //         calendar date in any timezone (avoids midnight boundary edge cases)
+  const noonUTC = new Date(`${dateStr}T12:00:00Z`);
 
-  // Get the actual calendar date in the target TZ
-  const tzDateStr = ref.toLocaleDateString('en-CA', { timeZone: TZ }); // "YYYY-MM-DD"
+  // Step 2: Get the UTC offset (in ms) for this TZ at this moment
+  //         by comparing what the TZ reads vs actual UTC
+  const tzMidnightStr = noonUTC.toLocaleDateString('en-CA', { timeZone: TZ }) + 'T00:00:00Z';
+  //                                                                                         ^ Z here = treat as UTC anchor
 
-  // Build a "midnight in TZ" timestamp by finding the UTC offset at that moment
-  const formatter = new Intl.DateTimeFormat('en-US', {
+  // Step 3: Find what UTC time corresponds to midnight in TZ
+  //         Use Intl to read back the TZ's local time for our UTC anchor
+  const anchor = new Date(tzMidnightStr); // e.g. 2026-03-30T00:00:00Z
+  const localParts = new Intl.DateTimeFormat('en-US', {
     timeZone: TZ,
-    year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
     hour12: false,
-  });
+  }).formatToParts(anchor);
 
-  // Use a simple offset calculation: parse midnight as if local, then correct
-  // This approach works universally for any IANA timezone
-  const candidate = new Date(`${tzDateStr}T00:00:00`);
+  const lp = {};
+  localParts.forEach(({ type, value }) => { lp[type] = value; });
+  const offsetMs =
+    (parseInt(lp.hour === '24' ? '0' : lp.hour, 10)) * 3_600_000 +
+    parseInt(lp.minute, 10)                            *    60_000 +
+    parseInt(lp.second, 10)                            *     1_000;
 
-  // Get what TZ thinks the time is for this UTC candidate
-  const parts = formatter.formatToParts(candidate);
-  const p = {};
-  parts.forEach(({ type, value }) => { p[type] = value; });
-  const tzHour   = parseInt(p.hour === '24' ? '0' : p.hour, 10);
-  const tzMinute = parseInt(p.minute, 10);
-  const tzSecond = parseInt(p.second, 10);
-
-  // Adjust candidate so that TZ reads exactly 00:00:00
-  candidate.setTime(
-    candidate.getTime()
-    - tzHour   * 3600_000
-    - tzMinute *    60_000
-    - tzSecond *     1_000
-  );
-  return candidate;
+  // Step 4: Subtract offset so TZ reads exactly 00:00:00
+  return new Date(anchor.getTime() - offsetMs);
 };
 
 /**
