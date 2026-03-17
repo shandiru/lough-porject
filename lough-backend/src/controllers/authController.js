@@ -238,9 +238,9 @@ export const loginUser = async (req, res) => {
     res.status(200).json({
       accessToken,
       user: {
-        name: user.firstName,
+        name: `${user.firstName} ${user.lastName}`,
         role: user.role,
-
+        profileImage: user.profileImage || null,
       }
     });
   } catch (err) {
@@ -276,8 +276,9 @@ export const refreshToken = async (req, res) => {
     res.status(200).json({
       accessToken: newAccessToken,
       user: {
-        name: user.firstName,
-        role: user.role
+        name: `${user.firstName} ${user.lastName}`,
+        role: user.role,
+        profileImage: user.profileImage || null,
       }
     });
 
