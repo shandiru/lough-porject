@@ -716,12 +716,9 @@ export const getCalendarBookings = async (req, res) => {
       .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName' } })
       .sort({ bookingDate: 1, bookingTime: 1 });
 
-    const googleQuery = { date: { $gte: colomboDayStart(startDate), $lte: colomboDayEnd(endDate) } };
-    if (staffId) googleQuery.staffId = staffId;
-    const googleBookings = await Googlebooking.find(googleQuery)
-      .populate({ path: 'staffId', populate: { path: 'userId', select: 'firstName lastName' } });
+    
 
-    res.status(200).json({ bookings, googleBookings });
+    res.status(200).json({ bookings });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
