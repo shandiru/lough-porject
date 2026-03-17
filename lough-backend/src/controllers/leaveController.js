@@ -128,7 +128,7 @@ export const applyLeave = async (req, res) => {
 
     const populated = await Leave.findById(leave._id).populate({
       path: 'staffId',
-      populate: { path: 'userId', select: 'firstName lastName email' },
+      populate: { path: 'userId', select: 'firstName lastName email profileImage' },
     });
 
     res.status(201).json({ message: 'Leave request submitted!', leave: populated });
@@ -302,7 +302,7 @@ export const reviewLeave = async (req, res) => {
 
     const leave = await Leave.findById(req.params.id).populate({
       path: 'staffId',
-      populate: { path: 'userId', select: 'firstName lastName email' },
+      populate: { path: 'userId', select: 'firstName lastName email profileImage' },
     });
     if (!leave) return res.status(404).json({ message: 'Leave not found' });
 
