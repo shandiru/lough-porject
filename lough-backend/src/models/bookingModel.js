@@ -82,6 +82,9 @@ const bookingSchema = new mongoose.Schema(
     consentFormCompleted: { type: Boolean, required: true, default: false },
     consentData:          { type: consentDataSchema },
 
+    // Client Consultation Form — submitted after payment
+    consultationFormCompleted: { type: Boolean, required: true, default: false },
+
     // Staff gender preference recorded at booking time
     staffGenderPreference: {
       type: String,

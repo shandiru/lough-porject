@@ -716,3 +716,119 @@ export const getStaffBookings = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+// ─── POST /api/bookings/:id/consultation-form ─────────────────────────────────
+/**
+ * Customer submits the consultation form AFTER payment.
+ * - Form data is NOT stored in DB (privacy).
+ * - Sets consultationFormCompleted = true on the booking.
+ * - Sends email to admin + assigned staff with form data.
+ */
+export const submitConsultationForm = async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.id)
+      .populate('service', 'name')
+      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName email' } });
+
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+
+    // Only the customer who owns this booking can submit
+    if (booking.customerEmail.toLowerCase() !== (req.user?.email || '').toLowerCase()) {
+      
+      return res.status(403).json({ message: 'Not authorised' });
+    }
+
+    if (booking.consultationFormCompleted) {
+      return res.status(400).json({ message: 'Consultation form already submitted' });
+    }
+
+    const {
+      fullName, dateOfBirth, age, address, phone, email,
+      emergencyContact,
+      medicalHistory = [],
+      currentMedications, pastSurgeries, treatmentAreasOfInterest,
+      signature,
+    } = req.body;
+
+    // Mark as completed (don't store form data)
+    booking.consultationFormCompleted = true;
+    await booking.save();
+
+    // ── Send email to admin + staff ──────────────────────────────────────────
+    try {
+      const nodemailer = (await import('nodemailer')).default;
+      const cfg        = (await import('../config/index.js')).default;
+
+      const mailer = nodemailer.createTransport({
+        service: 'gmail',
+        auth: { user: cfg.email.user, pass: cfg.email.pass },
+      });
+
+      // Collect recipient emails: all admins + assigned staff
+      const User   = (await import('../models/user.js')).default;
+      const admins = await User.find({ role: 'admin', isActive: true }).select('email');
+      const staffEmail = booking.staffMember?.userId?.email;
+
+      const recipients = [
+        ...admins.map(a => a.email),
+        ...(staffEmail ? [staffEmail] : []),
+      ].filter(Boolean);
+
+      const medList = medicalHistory.length
+        ? medicalHistory.map(h => `<li>${h}</li>`).join('')
+        : '<li>None selected</li>';
+
+      const html = `
+        <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;color:#333">
+          <div style="background:linear-gradient(135deg,#22B8C8 0%,#1a9aad 100%);padding:28px 32px;text-align:center;border-radius:12px 12px 0 0">
+            <h1 style="color:#fff;margin:0;font-size:20px;font-weight:700">Client Consultation Form</h1>
+            <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:13px">${booking.bookingNumber} · ${booking.service?.name || ''}</p>
+          </div>
+          <div style="background:#fafafa;padding:28px 32px;border-radius:0 0 12px 12px;border:1px solid #e5e5e5;border-top:none">
+            <p style="font-size:12px;color:#aaa;margin-top:0">Submitted by customer. Form data is NOT stored on server (privacy).</p>
+
+            <p style="font-weight:700;color:#22B8C8;font-size:13px;margin:16px 0 4px;text-transform:uppercase;letter-spacing:.5px">Personal Details</p>
+            <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden">
+              <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555;width:38%">Full Name</td><td style="padding:8px 12px">${fullName || '—'}</td></tr>
+              <tr><td style="padding:8px 12px;font-weight:600;color:#555">Date of Birth</td><td style="padding:8px 12px">${dateOfBirth || '—'}</td></tr>
+              <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">Age</td><td style="padding:8px 12px">${age || '—'}</td></tr>
+              <tr><td style="padding:8px 12px;font-weight:600;color:#555">Address</td><td style="padding:8px 12px">${address || '—'}</td></tr>
+              <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">Phone</td><td style="padding:8px 12px">${phone || '—'}</td></tr>
+              <tr><td style="padding:8px 12px;font-weight:600;color:#555">Email</td><td style="padding:8px 12px">${email || '—'}</td></tr>
+              <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">Emergency Contact</td><td style="padding:8px 12px">${emergencyContact || '—'}</td></tr>
+            </table>
+
+            <p style="font-weight:700;color:#22B8C8;font-size:13px;margin:16px 0 4px;text-transform:uppercase;letter-spacing:.5px">Medical History</p>
+            <ul style="margin:0;padding-left:20px;font-size:13px;color:#444">${medList}</ul>
+
+            <p style="font-weight:700;color:#22B8C8;font-size:13px;margin:16px 0 4px;text-transform:uppercase;letter-spacing:.5px">Additional Information</p>
+            <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden">
+              <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555;width:38%">Current Medications</td><td style="padding:8px 12px">${currentMedications || '—'}</td></tr>
+              <tr><td style="padding:8px 12px;font-weight:600;color:#555">Past Surgeries</td><td style="padding:8px 12px">${pastSurgeries || '—'}</td></tr>
+              <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">Treatment Areas of Interest</td><td style="padding:8px 12px">${treatmentAreasOfInterest || '—'}</td></tr>
+            </table>
+
+            <p style="font-weight:700;color:#22B8C8;font-size:13px;margin:16px 0 4px;text-transform:uppercase;letter-spacing:.5px">E-Signature</p>
+            <p style="font-size:13px;background:#fff8e1;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;font-style:italic;color:#92400e">"${signature || '—'}"</p>
+
+            <p style="font-size:11px;color:#bbb;margin-top:24px;text-align:center">Lough Skin · Automated consultation form notification</p>
+          </div>
+        </div>`;
+
+      await mailer.sendMail({
+        from:    `"Lough Skin" <${cfg.email.user}>`,
+        to:      recipients,
+        subject: `[Consultation Form] ${booking.customerName} — ${booking.bookingNumber}`,
+        html,
+      });
+      console.log('[Consultation Form Email] Sent to:', recipients.join(', '));
+    } catch (emailErr) {
+      console.error('[Consultation Form Email] Failed:', emailErr.message);
+      // Don't fail the request if email fails
+    }
+
+    res.status(200).json({ message: 'Consultation form submitted successfully', consultationFormCompleted: true });
+  } catch (err) {
+    console.error('[submitConsultationForm]', err);
+    res.status(500).json({ message: err.message });
+  }
+};

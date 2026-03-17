@@ -10,6 +10,7 @@ import {
   updateBookingStatus,
   adminCancelBooking,
   getCalendarBookings,
+  submitConsultationForm,
 } from '../controllers/bookingController.js';
 import { verifyToken, verifyAdmin, verifyStaff } from '../middleware/verifyToken.js';
 
@@ -34,5 +35,8 @@ bookingRouter.post('/admin',               verifyToken, verifyAdmin,  createBook
 bookingRouter.post('/:id/cancel-review',   verifyToken, verifyAdmin,  reviewCancellation);
 bookingRouter.post('/:id/admin-cancel',    verifyToken, verifyAdmin,  adminCancelBooking);
 bookingRouter.patch('/:id/status',         verifyToken, verifyAdmin,  updateBookingStatus);
+
+// Customer — submit consultation form after payment
+bookingRouter.post('/:id/consultation-form', verifyToken, submitConsultationForm);
 
 export default bookingRouter;
