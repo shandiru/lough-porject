@@ -11,6 +11,8 @@ import {
   adminCancelBooking,
   getCalendarBookings,
   submitConsultationForm,
+  requestReschedule,
+  reviewReschedule,
 } from '../controllers/bookingController.js';
 import { verifyToken, verifyAdmin, verifyStaff } from '../middleware/verifyToken.js';
 
@@ -38,5 +40,11 @@ bookingRouter.patch('/:id/status',         verifyToken, verifyAdmin,  updateBook
 
 // Customer — submit consultation form after payment
 bookingRouter.post('/:id/consultation-form', verifyToken, submitConsultationForm);
+
+// Customer — reschedule request (only if > 48h before appointment)
+bookingRouter.post('/:id/reschedule-request', verifyToken, requestReschedule);
+
+// Admin — review reschedule request (approve / reject / cancel)
+bookingRouter.post('/:id/reschedule-review', verifyToken, verifyAdmin, reviewReschedule);
 
 export default bookingRouter;

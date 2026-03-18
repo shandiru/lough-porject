@@ -192,7 +192,7 @@ const isSlotFreeSync = (startMins, endMins, {
 // ─── GET /api/bookings/available-slots ───────────────────────────────────────
 export const getAvailableSlots = async (req, res) => {
   try {
-    const { serviceId, date, customerGender, staffGenderPreference } = req.query;
+    const { serviceId, date, customerGender, staffGenderPreference, excludeBookingId } = req.query;
 
     if (!serviceId || !date)
       return res.status(400).json({ message: 'serviceId and date are required' });
@@ -240,7 +240,7 @@ export const getAvailableSlots = async (req, res) => {
 
     const [allLeaves, allBookings, allGoogleBookings, allTempLocks] = await Promise.all([
       Leave.find({ staffId: { $in: staffIds }, status: 'approved', startDate: { $lte: dayEnd }, endDate: { $gte: dayStart } }),
-      Booking.find({ staffMember: { $in: staffIds }, bookingDate: { $gte: dayStart, $lte: dayEnd }, status: { $nin: ['cancelled'] } }),
+      Booking.find({ staffMember: { $in: staffIds }, bookingDate: { $gte: dayStart, $lte: dayEnd }, status: { $nin: ['cancelled'] }, ...(excludeBookingId ? { _id: { $ne: excludeBookingId } } : {}) }),
       Googlebooking.find({ staffId: { $in: staffIds }, date: { $gte: dayStart, $lte: dayEnd } }),
       TempSlotLock.find({ staffId: { $in: staffIds }, bookingDate: dateStr, expiresAt: { $gt: new Date() } }),
     ]);
@@ -749,6 +749,380 @@ export const getStaffBookings = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+// ─── POST /api/bookings/:id/reschedule-request (customer) ────────────────────
+/**
+ * Customer requests a reschedule.
+ * Rules:
+ *  - Booking must be pending/confirmed
+ *  - Appointment must be MORE than 48 hours away
+ *  - Only one pending reschedule at a time
+ */
+export const requestReschedule = async (req, res) => {
+  try {
+    const { newDate, newTime, newStaffId, reason } = req.body;
+    if (!newDate || !newTime)
+      return res.status(400).json({ message: 'newDate and newTime are required' });
+
+    const booking = await Booking.findById(req.params.id).populate('service');
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+
+    const user = await User.findById(req.user.id);
+    if (!user || user.email.toLowerCase() !== booking.customerEmail.toLowerCase())
+      return res.status(403).json({ message: 'Not authorised' });
+
+    if (['cancelled', 'completed', 'no-show'].includes(booking.status))
+      return res.status(400).json({ message: `Cannot reschedule a ${booking.status} booking` });
+
+    if (booking.rescheduleRequestStatus === 'pending')
+      return res.status(400).json({ message: 'A reschedule request is already pending' });
+
+    // 48-hour rule: current appointment must be > 48h away
+    const bookingDateStr = new Date(booking.bookingDate).toLocaleDateString('en-CA', { timeZone: TZ });
+    const bookingDateTime = new Date(`${bookingDateStr}T${booking.bookingTime}:00`);
+    const hoursUntil = (bookingDateTime - new Date()) / (1000 * 60 * 60);
+    if (hoursUntil <= 48) {
+      return res.status(400).json({
+        message: 'Reschedule requests can only be made more than 48 hours before your appointment',
+      });
+    }
+
+    // Validate new date is also > 48h from now
+    const newDateTime = new Date(`${newDate}T${newTime}:00`);
+    const newHoursUntil = (newDateTime - new Date()) / (1000 * 60 * 60);
+    if (newHoursUntil <= 48)
+      return res.status(400).json({ message: 'The new appointment time must also be more than 48 hours from now' });
+
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
+    if (newDate <= todayStr)
+      return res.status(400).json({ message: 'New booking date must be in the future' });
+
+    booking.rescheduleRequestedAt   = new Date();
+    booking.rescheduleRequestedBy   = req.user.id;
+    booking.rescheduleReason        = reason || '';
+    booking.rescheduleRequestStatus = 'pending';
+    booking.rescheduleDate          = colomboDayStart(newDate);
+    booking.rescheduleTime          = newTime;
+    booking.rescheduleStaffMember   = newStaffId || booking.staffMember;
+    await booking.save();
+
+    res.status(200).json({ message: 'Reschedule request submitted successfully', booking });
+  } catch (err) {
+    console.error('[requestReschedule]', err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── POST /api/bookings/:id/reschedule-review (admin) ────────────────────────
+/**
+ * Admin reviews a pending reschedule request.
+ * action: 'approve' | 'reject' | 'cancel'
+ * - approve: update date/time/staff, swap Google Calendar events, reset consultation form
+ * - reject:  keep original booking unchanged
+ * - cancel:  cancel booking entirely (with optional refund)
+ */
+export const reviewReschedule = async (req, res) => {
+  try {
+    const {
+      action,
+      newDate, newTime, newStaffId, // admin can override proposed values
+      refundAmount = 0, refundKey = '',
+      adminNote = '',
+    } = req.body;
+
+    if (!['approve', 'reject', 'cancel'].includes(action))
+      return res.status(400).json({ message: 'action must be approve, reject, or cancel' });
+
+    const booking = await Booking.findById(req.params.id)
+      .populate('service')
+      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName' } });
+
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    if (booking.rescheduleRequestStatus !== 'pending')
+      return res.status(400).json({ message: 'No pending reschedule request on this booking' });
+
+    // ── REJECT ────────────────────────────────────────────────────────────────
+    if (action === 'reject') {
+      booking.rescheduleRequestStatus = 'rejected';
+      if (adminNote)
+        booking.internalNotes = (booking.internalNotes ? booking.internalNotes + '\n' : '') + `[Reschedule rejected] ${adminNote}`;
+      await booking.save();
+      return res.status(200).json({ message: 'Reschedule request rejected', booking });
+    }
+
+    // ── CANCEL ────────────────────────────────────────────────────────────────
+    if (action === 'cancel') {
+      if (refundAmount > 0) {
+        const expectedKey = config.adminRefundKey;
+        if (!expectedKey) return res.status(500).json({ message: 'ADMIN_REFUND_KEY is not configured.' });
+        if (refundKey !== expectedKey) return res.status(403).json({ message: 'Invalid refund key.' });
+      }
+      let stripeRefundId = null, stripeErrMsg = null;
+      if (refundAmount > 0 && booking.stripePaymentIntentId) {
+        try {
+          const { default: Stripe } = await import('stripe');
+          const stripe = new Stripe(config.stripe.secretKey);
+          const refund = await stripe.refunds.create({ payment_intent: booking.stripePaymentIntentId, amount: refundAmount });
+          stripeRefundId = refund.id;
+        } catch (e) { stripeErrMsg = e.message; }
+      }
+      booking.status                  = 'cancelled';
+      booking.rescheduleRequestStatus = 'rejected';
+      booking.cancelledAt             = new Date();
+      booking.cancelledBy             = req.user.id;
+      booking.cancellationReason      = booking.rescheduleReason || 'Cancelled during reschedule review';
+      if (adminNote) booking.internalNotes = (booking.internalNotes ? booking.internalNotes + '\n' : '') + `[Reschedule→Cancel] ${adminNote}`;
+      if (stripeRefundId) {
+        booking.refundAmount  = refundAmount;
+        booking.refundedAt    = new Date();
+        booking.paymentStatus = refundAmount >= booking.paidAmount ? 'refunded' : 'partially_refunded';
+        booking.paidAmount    = booking.paidAmount - refundAmount;
+      }
+      await booking.save();
+      if (booking.googleCalendarEventId) {
+        const oldStaff = await Staff.findById(booking.staffMember?._id ?? booking.staffMember).catch(() => null);
+        if (oldStaff) await deleteFromGoogleCalendar(oldStaff, booking.googleCalendarEventId);
+      }
+      return res.status(200).json({
+        message: stripeRefundId
+          ? `Booking cancelled and £${(refundAmount / 100).toFixed(2)} refunded`
+          : stripeErrMsg ? `Booking cancelled but refund failed: ${stripeErrMsg}` : 'Booking cancelled',
+        booking,
+      });
+    }
+
+    // ── APPROVE ───────────────────────────────────────────────────────────────
+    const finalDate    = newDate    || new Date(booking.rescheduleDate).toLocaleDateString('en-CA', { timeZone: TZ });
+    const finalTime    = newTime    || booking.rescheduleTime;
+    const finalStaffId = newStaffId || (booking.rescheduleStaffMember?.toString() || booking.staffMember?._id?.toString() || booking.staffMember?.toString());
+
+    if (!finalDate || !finalTime)
+      return res.status(400).json({ message: 'newDate and newTime are required for approval' });
+
+    const service   = booking.service;
+    const startMins = toMins(finalTime);
+    const endMins   = startMins + service.duration;
+
+    // ── Slot availability check — properly exclude THIS booking from the check
+    // so it doesn't block itself when staff/date/time is the same.
+    const dayStart_new = colomboDayStart(finalDate);
+    const dayEnd_new   = colomboDayEnd(finalDate);
+    const dayName_new  = tzDayName(finalDate);
+
+    const newStaffDoc = await Staff.findById(finalStaffId);
+    if (!newStaffDoc || newStaffDoc.isOnLeave)
+      return res.status(409).json({ message: 'Selected staff is not available (on leave or not found)' });
+
+    const [leavesForSlot, bookingsForSlot, googleBkgs, tempLocks] = await Promise.all([
+      Leave.find({ staffId: finalStaffId, status: 'approved', startDate: { $lte: dayEnd_new }, endDate: { $gte: dayStart_new } }),
+      // Exclude THIS booking from the conflict check — it is being moved, not staying
+      Booking.find({ staffMember: finalStaffId, bookingDate: { $gte: dayStart_new, $lte: dayEnd_new }, status: { $nin: ['cancelled'] }, _id: { $ne: booking._id } }),
+      Googlebooking.find({ staffId: finalStaffId, date: { $gte: dayStart_new, $lte: dayEnd_new } }),
+      TempSlotLock.find({ staffId: finalStaffId, bookingDate: finalDate, expiresAt: { $gt: new Date() } }),
+    ]);
+
+    const slotFree = isSlotFreeSync(startMins, endMins, {
+      daySchedule:      newStaffDoc.workingHours?.[dayName_new],
+      approvedLeaves:   leavesForSlot,
+      existingBookings: bookingsForSlot,
+      googleBookings:   googleBkgs,
+      tempLocks,
+      bookingDate:      finalDate,
+    });
+
+    if (!slotFree)
+      return res.status(409).json({ message: `${finalTime} on ${finalDate} is not available for this staff member` });
+
+    // ── Capture old staff info before overwriting ─────────────────────────────
+    const oldStaffId        = booking.staffMember?._id?.toString() ?? booking.staffMember?.toString();
+    const staffChanged      = oldStaffId !== finalStaffId.toString();
+    const oldGoogleEventId  = booking.googleCalendarEventId || null;
+
+    // Save old values for history
+    booking.previousBookingDate   = booking.bookingDate;
+    booking.previousBookingTime   = booking.bookingTime;
+    booking.previousStaffMember   = booking.staffMember?._id ?? booking.staffMember;
+    booking.previousGoogleEventId = oldGoogleEventId;
+
+    // ── Delete old Google Calendar event (always, on old staff's calendar) ────
+    if (oldGoogleEventId) {
+      const oldStaffDoc = await Staff.findById(oldStaffId).catch(() => null);
+      if (oldStaffDoc) await deleteFromGoogleCalendar(oldStaffDoc, oldGoogleEventId);
+    }
+
+    // ── Apply new booking values ──────────────────────────────────────────────
+    booking.bookingDate               = colomboDayStart(finalDate);
+    booking.bookingTime               = finalTime;
+    booking.staffMember               = finalStaffId;
+    booking.googleCalendarEventId     = null;
+    booking.rescheduleRequestStatus   = 'approved';
+    booking.consultationFormCompleted = false; // customer must re-submit after reschedule
+    if (adminNote)
+      booking.internalNotes = (booking.internalNotes ? booking.internalNotes + '\n' : '') + `[Reschedule approved → ${finalDate} ${finalTime}] ${adminNote}`;
+    await booking.save();
+
+    // ── Create new Google Calendar event on new staff's calendar ─────────────
+    const newStaffFull = await Staff.findById(finalStaffId)
+      .populate('userId', 'firstName lastName email').catch(() => null);
+    if (newStaffFull) {
+      const gcalEventId = await addToGoogleCalendar(newStaffFull, booking, service);
+      if (gcalEventId) { booking.googleCalendarEventId = gcalEventId; await booking.save(); }
+    }
+
+    // ── Email notifications ────────────────────────────────────────────────────
+    try {
+      const nodemailer = (await import('nodemailer')).default;
+      const cfg        = (await import('../config/index.js')).default;
+      const mailer     = nodemailer.createTransport({
+        service: 'gmail',
+        auth: { user: cfg.email.user, pass: cfg.email.pass },
+      });
+
+      const allAdmins   = await User.find({ role: 'admin', isActive: true }).select('email');
+      const newStaffUser = newStaffFull?.userId;
+      const newStaffEmail = newStaffUser?.email || null;
+      const newStaffName  = newStaffUser ? `${newStaffUser.firstName} ${newStaffUser.lastName}` : 'Staff';
+
+      const formattedDate = new Date(booking.bookingDate).toLocaleDateString('en-GB', { weekday:'long', day:'numeric', month:'long', year:'numeric', timeZone: TZ });
+
+      // ── 1. Email → new staff (confirm new appointment) ─────────────────────
+      if (newStaffEmail) {
+        await mailer.sendMail({
+          from:    `"Lough Skin" <${cfg.email.user}>`,
+          to:      newStaffEmail,
+          subject: `[Reschedule] New Appointment — ${booking.customerName} — ${booking.bookingNumber}`,
+          html: `
+            <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;color:#333">
+              <div style="background:linear-gradient(135deg,#22B8C8,#1a9aad);padding:28px 32px;text-align:center;border-radius:12px 12px 0 0">
+                <h1 style="color:#fff;margin:0;font-size:20px;font-weight:700">Appointment Rescheduled</h1>
+                <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:13px">${booking.bookingNumber}</p>
+              </div>
+              <div style="background:#fafafa;padding:28px 32px;border-radius:0 0 12px 12px;border:1px solid #e5e5e5;border-top:none">
+                <p style="font-size:14px">Hi ${newStaffName},</p>
+                <p style="font-size:14px">A booking has been rescheduled and assigned to you:</p>
+                <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;margin:16px 0">
+                  <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555;width:40%">Customer</td><td style="padding:8px 12px">${booking.customerName}</td></tr>
+                  <tr><td style="padding:8px 12px;font-weight:600;color:#555">Service</td><td style="padding:8px 12px">${service.name}</td></tr>
+                  <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">New Date</td><td style="padding:8px 12px;font-weight:700;color:#22B8C8">${formattedDate}</td></tr>
+                  <tr><td style="padding:8px 12px;font-weight:600;color:#555">New Time</td><td style="padding:8px 12px;font-weight:700;color:#22B8C8">${finalTime}</td></tr>
+                  <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">Duration</td><td style="padding:8px 12px">${service.duration} min</td></tr>
+                  <tr><td style="padding:8px 12px;font-weight:600;color:#555">Customer Phone</td><td style="padding:8px 12px">${booking.customerPhone}</td></tr>
+                </table>
+                ${adminNote ? `<p style="font-size:13px;background:#fff8e1;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;color:#92400e"><strong>Admin Note:</strong> ${adminNote}</p>` : ''}
+                <p style="font-size:11px;color:#bbb;margin-top:24px;text-align:center">Lough Skin · Automated reschedule notification</p>
+              </div>
+            </div>`,
+        }).catch(e => console.error('[Reschedule email → new staff] Failed:', e.message));
+      }
+
+      // ── 2. Email → old staff (if staff changed — notify they lost this booking) ──
+      if (staffChanged) {
+        const oldStaffDoc2 = await Staff.findById(oldStaffId).populate('userId', 'firstName lastName email').catch(() => null);
+        const oldStaffEmail = oldStaffDoc2?.userId?.email;
+        const oldStaffName  = oldStaffDoc2?.userId ? `${oldStaffDoc2.userId.firstName} ${oldStaffDoc2.userId.lastName}` : 'Staff';
+        const oldDateStr    = new Date(booking.previousBookingDate).toLocaleDateString('en-GB', { weekday:'long', day:'numeric', month:'long', year:'numeric', timeZone: TZ });
+
+        if (oldStaffEmail) {
+          await mailer.sendMail({
+            from:    `"Lough Skin" <${cfg.email.user}>`,
+            to:      oldStaffEmail,
+            subject: `[Reschedule] Appointment Removed — ${booking.customerName} — ${booking.bookingNumber}`,
+            html: `
+              <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;color:#333">
+                <div style="background:linear-gradient(135deg,#f97316,#ea6a10);padding:28px 32px;text-align:center;border-radius:12px 12px 0 0">
+                  <h1 style="color:#fff;margin:0;font-size:20px;font-weight:700">Appointment Reassigned</h1>
+                  <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:13px">${booking.bookingNumber}</p>
+                </div>
+                <div style="background:#fafafa;padding:28px 32px;border-radius:0 0 12px 12px;border:1px solid #e5e5e5;border-top:none">
+                  <p style="font-size:14px">Hi ${oldStaffName},</p>
+                  <p style="font-size:14px">The following appointment has been rescheduled and is <strong>no longer assigned to you</strong>:</p>
+                  <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;margin:16px 0">
+                    <tr style="background:#fff5f5"><td style="padding:8px 12px;font-weight:600;color:#555;width:40%">Customer</td><td style="padding:8px 12px">${booking.customerName}</td></tr>
+                    <tr><td style="padding:8px 12px;font-weight:600;color:#555">Service</td><td style="padding:8px 12px">${service.name}</td></tr>
+                    <tr style="background:#fff5f5"><td style="padding:8px 12px;font-weight:600;color:#555">Was Scheduled</td><td style="padding:8px 12px;text-decoration:line-through;color:#999">${oldDateStr} at ${booking.previousBookingTime}</td></tr>
+                    <tr><td style="padding:8px 12px;font-weight:600;color:#555">Now Assigned To</td><td style="padding:8px 12px;font-weight:700;color:#22B8C8">${newStaffName}</td></tr>
+                  </table>
+                  <p style="font-size:12px;color:#aaa;background:#f9fafb;padding:10px;border-radius:8px">Your calendar has been updated automatically.</p>
+                  <p style="font-size:11px;color:#bbb;margin-top:24px;text-align:center">Lough Skin · Automated reschedule notification</p>
+                </div>
+              </div>`,
+          }).catch(e => console.error('[Reschedule email → old staff] Failed:', e.message));
+        }
+      }
+
+      // ── 3. Email → customer (reschedule confirmed + re-fill consultation form) ──
+      await mailer.sendMail({
+        from:    `"Lough Skin" <${cfg.email.user}>`,
+        to:      booking.customerEmail,
+        subject: `Your appointment has been rescheduled — ${booking.bookingNumber}`,
+        html: `
+          <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;color:#333">
+            <div style="background:linear-gradient(135deg,#22B8C8,#1a9aad);padding:28px 32px;text-align:center;border-radius:12px 12px 0 0">
+              <h1 style="color:#fff;margin:0;font-size:20px;font-weight:700">Appointment Rescheduled</h1>
+              <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:13px">${booking.bookingNumber}</p>
+            </div>
+            <div style="background:#fafafa;padding:28px 32px;border-radius:0 0 12px 12px;border:1px solid #e5e5e5;border-top:none">
+              <p style="font-size:14px">Hi ${booking.customerName},</p>
+              <p style="font-size:14px">Your appointment has been successfully rescheduled. Here are your new details:</p>
+              <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;margin:16px 0">
+                <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555;width:40%">Service</td><td style="padding:8px 12px">${service.name}</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:600;color:#555">New Date</td><td style="padding:8px 12px;font-weight:700;color:#22B8C8">${formattedDate}</td></tr>
+                <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">New Time</td><td style="padding:8px 12px;font-weight:700;color:#22B8C8">${finalTime}</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:600;color:#555">Staff</td><td style="padding:8px 12px">${newStaffName}</td></tr>
+                <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">Duration</td><td style="padding:8px 12px">${service.duration} min</td></tr>
+              </table>
+              <div style="background:#fff8e1;border:1px solid #fde68a;border-radius:12px;padding:16px 20px;margin:16px 0">
+                <p style="font-weight:700;color:#92400e;margin:0 0 8px;font-size:14px">Action Required — Consultation Form</p>
+                <p style="font-size:13px;color:#78350f;margin:0">Because your appointment has been rescheduled, please log in to your account and re-submit your <strong>Client Consultation Form</strong> before your new appointment date. This ensures our staff have your most up-to-date information.</p>
+              </div>
+              <p style="font-size:13px;color:#666">If you have any questions, please contact us directly.</p>
+              <p style="font-size:11px;color:#bbb;margin-top:24px;text-align:center">Lough Skin · Automated reschedule confirmation</p>
+            </div>
+          </div>`,
+      }).catch(e => console.error('[Reschedule email → customer] Failed:', e.message));
+
+      // ── 4. Email → admin (summary) ────────────────────────────────────────────
+      const adminEmails = allAdmins.map(a => a.email).filter(Boolean);
+      if (adminEmails.length) {
+        await mailer.sendMail({
+          from:    `"Lough Skin" <${cfg.email.user}>`,
+          to:      adminEmails,
+          subject: `[Admin] Reschedule Approved — ${booking.customerName} — ${booking.bookingNumber}`,
+          html: `
+            <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;color:#333">
+              <div style="background:linear-gradient(135deg,#22B8C8,#1a9aad);padding:20px 28px;border-radius:12px 12px 0 0">
+                <h1 style="color:#fff;margin:0;font-size:18px">Reschedule Approved</h1>
+              </div>
+              <div style="background:#fafafa;padding:24px 28px;border-radius:0 0 12px 12px;border:1px solid #e5e5e5;border-top:none">
+                <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden">
+                  <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555;width:40%">Booking</td><td style="padding:8px 12px">${booking.bookingNumber}</td></tr>
+                  <tr><td style="padding:8px 12px;font-weight:600;color:#555">Customer</td><td style="padding:8px 12px">${booking.customerName} (${booking.customerEmail})</td></tr>
+                  <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">New Date</td><td style="padding:8px 12px;font-weight:700;color:#22B8C8">${formattedDate} at ${finalTime}</td></tr>
+                  <tr><td style="padding:8px 12px;font-weight:600;color:#555">Staff</td><td style="padding:8px 12px">${newStaffName}${staffChanged ? ' <em style="color:#f97316">(changed)</em>' : ''}</td></tr>
+                  <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">Consultation Form</td><td style="padding:8px 12px;color:#ef4444;font-weight:600">Reset — customer must re-submit</td></tr>
+                </table>
+                ${adminNote ? `<p style="font-size:13px;background:#fff8e1;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;color:#92400e;margin-top:12px"><strong>Note:</strong> ${adminNote}</p>` : ''}
+              </div>
+            </div>`,
+        }).catch(e => console.error('[Reschedule email → admin] Failed:', e.message));
+      }
+
+      console.log('[Reschedule Emails] Sent: new staff, customer, admin', staffChanged ? ', old staff' : '');
+    } catch (emailErr) {
+      console.error('[Reschedule Email Block] Failed:', emailErr.message);
+      // Never block the response for email failures
+    }
+
+    const populated = await Booking.findById(booking._id)
+      .populate('service', 'name price duration')
+      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName profileImage' } });
+
+    res.status(200).json({ message: 'Reschedule approved — new appointment confirmed', booking: populated });
+  } catch (err) {
+    console.error('[reviewReschedule]', err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
 // ─── POST /api/bookings/:id/consultation-form ─────────────────────────────────
 /**
  * Customer submits the consultation form AFTER payment.

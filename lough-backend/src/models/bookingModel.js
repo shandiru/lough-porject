@@ -105,6 +105,21 @@ const bookingSchema = new mongoose.Schema(
     refundAmount:          { type: Number, default: 0 }, // pence
     refundedAt:            { type: Date },
 
+    // Customer reschedule request flow
+    rescheduleRequestedAt:   { type: Date },
+    rescheduleRequestedBy:   { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    rescheduleReason:        { type: String },
+    rescheduleRequestStatus: { type: String, enum: ['pending', 'approved', 'rejected'], default: null },
+    // Proposed new date/time/staff (set by customer, can be changed by staff/admin before approval)
+    rescheduleDate:          { type: Date },
+    rescheduleTime:          { type: String, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
+    rescheduleStaffMember:   { type: mongoose.Schema.Types.ObjectId, ref: 'Staff' },
+    // When approved, old values saved here for reference
+    previousBookingDate:     { type: Date },
+    previousBookingTime:     { type: String },
+    previousStaffMember:     { type: mongoose.Schema.Types.ObjectId, ref: 'Staff' },
+    previousGoogleEventId:   { type: String },
+
     // Meta
     bookingSource: {
       type: String,
