@@ -410,7 +410,85 @@ export const createBooking = async (req, res) => {
 
     const populated = await Booking.findById(booking._id)
       .populate('service', 'name price duration')
-      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName profileImage' } });
+      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName profileImage email' } });
+
+    // ── Email notifications for admin-created booking ─────────────────────────
+    try {
+      const nodemailer = (await import('nodemailer')).default;
+      const mailer = nodemailer.createTransport({
+        service: 'gmail',
+        auth: { user: config.email.user, pass: config.email.pass },
+      });
+
+      const staffUser      = populated.staffMember?.userId;
+      const staffEmail     = staffUser?.email || null;
+      const staffName      = staffUser ? `${staffUser.firstName} ${staffUser.lastName}` : 'Staff';
+      const formattedDate  = new Date(booking.bookingDate).toLocaleDateString('en-GB', {
+        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: TZ,
+      });
+
+      // 1. Email → Staff
+      if (staffEmail) {
+        await mailer.sendMail({
+          from:    `"Lough Skin" <${config.email.user}>`,
+          to:      staffEmail,
+          subject: `New Booking — ${customerName} — ${booking.bookingNumber}`,
+          html: `
+            <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;color:#333">
+              <div style="background:linear-gradient(135deg,#22B8C8,#1a9aad);padding:28px 32px;text-align:center;border-radius:12px 12px 0 0">
+                <h1 style="color:#fff;margin:0;font-size:20px;font-weight:700">New Appointment Booked</h1>
+                <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:13px">${booking.bookingNumber}</p>
+              </div>
+              <div style="background:#fafafa;padding:28px 32px;border-radius:0 0 12px 12px;border:1px solid #e5e5e5;border-top:none">
+                <p style="font-size:14px">Hi ${staffName},</p>
+                <p style="font-size:14px">A new appointment has been booked for you by the admin:</p>
+                <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;margin:16px 0">
+                  <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555;width:40%">Customer</td><td style="padding:8px 12px">${customerName}</td></tr>
+                  <tr><td style="padding:8px 12px;font-weight:600;color:#555">Phone</td><td style="padding:8px 12px">${customerPhone}</td></tr>
+                  <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">Service</td><td style="padding:8px 12px">${service.name}</td></tr>
+                  <tr><td style="padding:8px 12px;font-weight:600;color:#555">Date</td><td style="padding:8px 12px;font-weight:700;color:#22B8C8">${formattedDate}</td></tr>
+                  <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">Time</td><td style="padding:8px 12px;font-weight:700;color:#22B8C8">${bookingTime}</td></tr>
+                  <tr><td style="padding:8px 12px;font-weight:600;color:#555">Duration</td><td style="padding:8px 12px">${service.duration} min</td></tr>
+                </table>
+                <p style="font-size:11px;color:#bbb;margin-top:24px;text-align:center">Lough Skin · Automated booking notification</p>
+              </div>
+            </div>`,
+        }).catch(e => console.error('[createBooking email → staff] Failed:', e.message));
+      }
+
+      // 2. Email → Customer
+      await mailer.sendMail({
+        from:    `"Lough Skin" <${config.email.user}>`,
+        to:      customerEmail,
+        subject: `Booking Confirmed — ${booking.bookingNumber}`,
+        html: `
+          <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;color:#333">
+            <div style="background:linear-gradient(135deg,#22B8C8,#1a9aad);padding:28px 32px;text-align:center;border-radius:12px 12px 0 0">
+              <h1 style="color:#fff;margin:0;font-size:20px;font-weight:700">Booking Confirmed</h1>
+              <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:13px">${booking.bookingNumber}</p>
+            </div>
+            <div style="background:#fafafa;padding:28px 32px;border-radius:0 0 12px 12px;border:1px solid #e5e5e5;border-top:none">
+              <p style="font-size:14px">Hi ${customerName},</p>
+              <p style="font-size:14px">Your appointment has been confirmed. Here are your booking details:</p>
+              <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;margin:16px 0">
+                <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555;width:40%">Booking Ref</td><td style="padding:8px 12px;font-weight:700">${booking.bookingNumber}</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:600;color:#555">Service</td><td style="padding:8px 12px">${service.name}</td></tr>
+                <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">Date</td><td style="padding:8px 12px;font-weight:700;color:#22B8C8">${formattedDate}</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:600;color:#555">Time</td><td style="padding:8px 12px;font-weight:700;color:#22B8C8">${bookingTime}</td></tr>
+                <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">Staff</td><td style="padding:8px 12px">${staffName}</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:600;color:#555">Duration</td><td style="padding:8px 12px">${service.duration} min</td></tr>
+                <tr style="background:#f0fafa"><td style="padding:8px 12px;font-weight:600;color:#555">Price</td><td style="padding:8px 12px">£${(service.price).toFixed(2)}</td></tr>
+              </table>
+              <p style="font-size:13px;color:#666">If you need to make changes, please contact us directly.</p>
+              <p style="font-size:11px;color:#bbb;margin-top:24px;text-align:center">Lough Skin · Automated booking confirmation</p>
+            </div>
+          </div>`,
+      }).catch(e => console.error('[createBooking email → customer] Failed:', e.message));
+
+      console.log('[createBooking Emails] Sent to staff and customer');
+    } catch (emailErr) {
+      console.error('[createBooking Email Block] Failed:', emailErr.message);
+    }
 
     res.status(201).json(populated);
   } catch (err) {
@@ -560,6 +638,79 @@ export const reviewCancellation = async (req, res) => {
       if (staff) await deleteFromGoogleCalendar(staff, booking.googleCalendarEventId);
     }
 
+    // ── Email notifications for approved cancellation ─────────────────────────
+    try {
+      const nodemailer = (await import('nodemailer')).default;
+      const mailer = nodemailer.createTransport({
+        service: 'gmail',
+        auth: { user: config.email.user, pass: config.email.pass },
+      });
+
+      const staffFullDoc  = await Staff.findById(booking.staffMember?._id ?? booking.staffMember)
+        .populate('userId', 'firstName lastName email').catch(() => null);
+      const staffName       = staffFullDoc?.userId ? `${staffFullDoc.userId.firstName} ${staffFullDoc.userId.lastName}` : 'Staff';
+      const staffEmailFinal = staffFullDoc?.userId?.email || null;
+      const formattedDate   = new Date(booking.bookingDate).toLocaleDateString('en-GB', {
+        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: TZ,
+      });
+
+      const cancelTable = `
+        <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;margin:16px 0">
+          <tr style="background:#fff5f5"><td style="padding:8px 12px;font-weight:600;color:#555;width:40%">Booking Ref</td><td style="padding:8px 12px">${booking.bookingNumber}</td></tr>
+          <tr><td style="padding:8px 12px;font-weight:600;color:#555">Service</td><td style="padding:8px 12px">${booking.service?.name}</td></tr>
+          <tr style="background:#fff5f5"><td style="padding:8px 12px;font-weight:600;color:#555">Date</td><td style="padding:8px 12px">${formattedDate} at ${booking.bookingTime}</td></tr>
+        </table>`;
+
+      // Email → Customer (cancellation approved)
+      await mailer.sendMail({
+        from:    `"Lough Skin" <${config.email.user}>`,
+        to:      booking.customerEmail,
+        subject: `Cancellation Approved — ${booking.bookingNumber}`,
+        html: `
+          <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;color:#333">
+            <div style="background:linear-gradient(135deg,#ef4444,#dc2626);padding:28px 32px;text-align:center;border-radius:12px 12px 0 0">
+              <h1 style="color:#fff;margin:0;font-size:20px;font-weight:700">Cancellation Approved</h1>
+              <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:13px">${booking.bookingNumber}</p>
+            </div>
+            <div style="background:#fafafa;padding:28px 32px;border-radius:0 0 12px 12px;border:1px solid #e5e5e5;border-top:none">
+              <p style="font-size:14px">Hi ${booking.customerName},</p>
+              <p style="font-size:14px">Your cancellation request has been approved. Your appointment has been cancelled.</p>
+              ${cancelTable}
+              ${stripeRefunded ? `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px 16px;font-size:13px;color:#166534;margin-top:8px">A refund of <strong>£${(refundAmount / 100).toFixed(2)}</strong> has been issued and will appear in your account within 5–10 business days.</div>` : ''}
+              <p style="font-size:13px;color:#666;margin-top:16px">If you have any questions, please contact us directly.</p>
+              <p style="font-size:11px;color:#bbb;margin-top:24px;text-align:center">Lough Skin · Automated cancellation notification</p>
+            </div>
+          </div>`,
+      }).catch(e => console.error('[reviewCancellation email → customer] Failed:', e.message));
+
+      // Email → Staff
+      if (staffEmailFinal) {
+        await mailer.sendMail({
+          from:    `"Lough Skin" <${config.email.user}>`,
+          to:      staffEmailFinal,
+          subject: `[Cancelled] Appointment — ${booking.customerName} — ${booking.bookingNumber}`,
+          html: `
+            <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;color:#333">
+              <div style="background:linear-gradient(135deg,#f97316,#ea6a10);padding:28px 32px;text-align:center;border-radius:12px 12px 0 0">
+                <h1 style="color:#fff;margin:0;font-size:20px;font-weight:700">Appointment Cancelled</h1>
+                <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:13px">${booking.bookingNumber}</p>
+              </div>
+              <div style="background:#fafafa;padding:28px 32px;border-radius:0 0 12px 12px;border:1px solid #e5e5e5;border-top:none">
+                <p style="font-size:14px">Hi ${staffName},</p>
+                <p style="font-size:14px">The customer's cancellation request has been approved. This appointment has been removed from your schedule:</p>
+                ${cancelTable}
+                <p style="font-size:12px;color:#aaa;background:#f9fafb;padding:10px;border-radius:8px">Your calendar has been updated automatically.</p>
+                <p style="font-size:11px;color:#bbb;margin-top:24px;text-align:center">Lough Skin · Automated cancellation notification</p>
+              </div>
+            </div>`,
+        }).catch(e => console.error('[reviewCancellation email → staff] Failed:', e.message));
+      }
+
+      console.log('[reviewCancellation Emails] Sent to customer and staff');
+    } catch (emailErr) {
+      console.error('[reviewCancellation Email Block] Failed:', emailErr.message);
+    }
+
     // ── Response ──────────────────────────────────────────────────────────────
     let message = 'Booking cancelled (no refund)';
     if (stripeRefunded) message = `Booking cancelled and £${(refundAmount/100).toFixed(2)} refunded`;
@@ -581,7 +732,7 @@ export const updateBookingStatus = async (req, res) => {
 
     const booking = await Booking.findById(req.params.id)
       .populate('service', 'name price duration')
-      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName' } });
+      .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName email' } });
     if (!booking) return res.status(404).json({ message: 'Booking not found' });
 
     booking.status = status;
@@ -605,6 +756,80 @@ export const updateBookingStatus = async (req, res) => {
     if (status === 'cancelled' && booking.googleCalendarEventId) {
       const staff = await Staff.findById(booking.staffMember._id || booking.staffMember).catch(() => null);
       if (staff) await deleteFromGoogleCalendar(staff, booking.googleCalendarEventId);
+    }
+
+    // ── Email notifications when status set to 'cancelled' ───────────────────
+    if (status === 'cancelled') {
+      try {
+        const nodemailer = (await import('nodemailer')).default;
+        const mailer = nodemailer.createTransport({
+          service: 'gmail',
+          auth: { user: config.email.user, pass: config.email.pass },
+        });
+
+        const staffFullDoc  = await Staff.findById(booking.staffMember?._id ?? booking.staffMember)
+          .populate('userId', 'firstName lastName email').catch(() => null);
+        const staffName       = staffFullDoc?.userId ? `${staffFullDoc.userId.firstName} ${staffFullDoc.userId.lastName}` : 'Staff';
+        const staffEmailFinal = staffFullDoc?.userId?.email || null;
+        const formattedDate   = new Date(booking.bookingDate).toLocaleDateString('en-GB', {
+          weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: TZ,
+        });
+
+        const cancelTable = `
+          <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;margin:16px 0">
+            <tr style="background:#fff5f5"><td style="padding:8px 12px;font-weight:600;color:#555;width:40%">Booking Ref</td><td style="padding:8px 12px">${booking.bookingNumber}</td></tr>
+            <tr><td style="padding:8px 12px;font-weight:600;color:#555">Service</td><td style="padding:8px 12px">${booking.service?.name}</td></tr>
+            <tr style="background:#fff5f5"><td style="padding:8px 12px;font-weight:600;color:#555">Date</td><td style="padding:8px 12px">${formattedDate} at ${booking.bookingTime}</td></tr>
+          </table>`;
+
+        // Email → Customer
+        await mailer.sendMail({
+          from:    `"Lough Skin" <${config.email.user}>`,
+          to:      booking.customerEmail,
+          subject: `Booking Cancelled — ${booking.bookingNumber}`,
+          html: `
+            <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;color:#333">
+              <div style="background:linear-gradient(135deg,#ef4444,#dc2626);padding:28px 32px;text-align:center;border-radius:12px 12px 0 0">
+                <h1 style="color:#fff;margin:0;font-size:20px;font-weight:700">Booking Cancelled</h1>
+                <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:13px">${booking.bookingNumber}</p>
+              </div>
+              <div style="background:#fafafa;padding:28px 32px;border-radius:0 0 12px 12px;border:1px solid #e5e5e5;border-top:none">
+                <p style="font-size:14px">Hi ${booking.customerName},</p>
+                <p style="font-size:14px">We're sorry to inform you that your appointment has been cancelled.</p>
+                ${cancelTable}
+                <p style="font-size:13px;color:#666">If you have any questions, please contact us directly.</p>
+                <p style="font-size:11px;color:#bbb;margin-top:24px;text-align:center">Lough Skin · Automated cancellation notification</p>
+              </div>
+            </div>`,
+        }).catch(e => console.error('[updateStatus cancel email → customer] Failed:', e.message));
+
+        // Email → Staff
+        if (staffEmailFinal) {
+          await mailer.sendMail({
+            from:    `"Lough Skin" <${config.email.user}>`,
+            to:      staffEmailFinal,
+            subject: `[Cancelled] Appointment — ${booking.customerName} — ${booking.bookingNumber}`,
+            html: `
+              <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;color:#333">
+                <div style="background:linear-gradient(135deg,#f97316,#ea6a10);padding:28px 32px;text-align:center;border-radius:12px 12px 0 0">
+                  <h1 style="color:#fff;margin:0;font-size:20px;font-weight:700">Appointment Cancelled</h1>
+                  <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:13px">${booking.bookingNumber}</p>
+                </div>
+                <div style="background:#fafafa;padding:28px 32px;border-radius:0 0 12px 12px;border:1px solid #e5e5e5;border-top:none">
+                  <p style="font-size:14px">Hi ${staffName},</p>
+                  <p style="font-size:14px">The following appointment has been cancelled and removed from your schedule:</p>
+                  ${cancelTable}
+                  <p style="font-size:12px;color:#aaa;background:#f9fafb;padding:10px;border-radius:8px">Your calendar has been updated automatically.</p>
+                  <p style="font-size:11px;color:#bbb;margin-top:24px;text-align:center">Lough Skin · Automated cancellation notification</p>
+                </div>
+              </div>`,
+          }).catch(e => console.error('[updateStatus cancel email → staff] Failed:', e.message));
+        }
+
+        console.log('[updateBookingStatus cancel Emails] Sent to customer and staff');
+      } catch (emailErr) {
+        console.error('[updateBookingStatus cancel Email Block] Failed:', emailErr.message);
+      }
     }
 
     res.status(200).json(booking);
@@ -685,6 +910,81 @@ export const adminCancelBooking = async (req, res) => {
       const staffId = booking.staffMember?._id ?? booking.staffMember;
       const staff   = await Staff.findById(staffId).catch(() => null);
       if (staff) await deleteFromGoogleCalendar(staff, booking.googleCalendarEventId);
+    }
+
+    // ── Email notifications for admin cancel ──────────────────────────────────
+    try {
+      const nodemailer = (await import('nodemailer')).default;
+      const mailer = nodemailer.createTransport({
+        service: 'gmail',
+        auth: { user: config.email.user, pass: config.email.pass },
+      });
+
+      const staffUser     = booking.staffMember?.userId;
+      const staffEmail    = staffUser ? (await Staff.findById(booking.staffMember?._id ?? booking.staffMember).populate('userId','email').catch(()=>null))?.userId?.email : null;
+      const staffFullDoc  = await Staff.findById(booking.staffMember?._id ?? booking.staffMember).populate('userId','firstName lastName email').catch(() => null);
+      const staffName     = staffFullDoc?.userId ? `${staffFullDoc.userId.firstName} ${staffFullDoc.userId.lastName}` : 'Staff';
+      const staffEmailFinal = staffFullDoc?.userId?.email || null;
+      const formattedDate = new Date(booking.bookingDate).toLocaleDateString('en-GB', {
+        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: TZ,
+      });
+
+      const cancelHtmlTable = `
+        <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;margin:16px 0">
+          <tr style="background:#fff5f5"><td style="padding:8px 12px;font-weight:600;color:#555;width:40%">Booking Ref</td><td style="padding:8px 12px">${booking.bookingNumber}</td></tr>
+          <tr><td style="padding:8px 12px;font-weight:600;color:#555">Service</td><td style="padding:8px 12px">${booking.service?.name}</td></tr>
+          <tr style="background:#fff5f5"><td style="padding:8px 12px;font-weight:600;color:#555">Date</td><td style="padding:8px 12px">${formattedDate} at ${booking.bookingTime}</td></tr>
+          ${reason ? `<tr><td style="padding:8px 12px;font-weight:600;color:#555">Reason</td><td style="padding:8px 12px">${reason}</td></tr>` : ''}
+        </table>`;
+
+      // 1. Email → Customer
+      await mailer.sendMail({
+        from:    `"Lough Skin" <${config.email.user}>`,
+        to:      booking.customerEmail,
+        subject: `Booking Cancelled — ${booking.bookingNumber}`,
+        html: `
+          <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;color:#333">
+            <div style="background:linear-gradient(135deg,#ef4444,#dc2626);padding:28px 32px;text-align:center;border-radius:12px 12px 0 0">
+              <h1 style="color:#fff;margin:0;font-size:20px;font-weight:700">Booking Cancelled</h1>
+              <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:13px">${booking.bookingNumber}</p>
+            </div>
+            <div style="background:#fafafa;padding:28px 32px;border-radius:0 0 12px 12px;border:1px solid #e5e5e5;border-top:none">
+              <p style="font-size:14px">Hi ${booking.customerName},</p>
+              <p style="font-size:14px">We're sorry to inform you that your appointment has been cancelled by our team.</p>
+              ${cancelHtmlTable}
+              ${stripeRefunded ? `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px 16px;font-size:13px;color:#166534;margin-top:8px">A refund of <strong>£${(refundAmount / 100).toFixed(2)}</strong> has been issued and will appear in your account within 5–10 business days.</div>` : ''}
+              <p style="font-size:13px;color:#666;margin-top:16px">If you have any questions, please contact us directly.</p>
+              <p style="font-size:11px;color:#bbb;margin-top:24px;text-align:center">Lough Skin · Automated cancellation notification</p>
+            </div>
+          </div>`,
+      }).catch(e => console.error('[adminCancel email → customer] Failed:', e.message));
+
+      // 2. Email → Staff
+      if (staffEmailFinal) {
+        await mailer.sendMail({
+          from:    `"Lough Skin" <${config.email.user}>`,
+          to:      staffEmailFinal,
+          subject: `[Cancelled] Appointment — ${booking.customerName} — ${booking.bookingNumber}`,
+          html: `
+            <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;color:#333">
+              <div style="background:linear-gradient(135deg,#f97316,#ea6a10);padding:28px 32px;text-align:center;border-radius:12px 12px 0 0">
+                <h1 style="color:#fff;margin:0;font-size:20px;font-weight:700">Appointment Cancelled</h1>
+                <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:13px">${booking.bookingNumber}</p>
+              </div>
+              <div style="background:#fafafa;padding:28px 32px;border-radius:0 0 12px 12px;border:1px solid #e5e5e5;border-top:none">
+                <p style="font-size:14px">Hi ${staffName},</p>
+                <p style="font-size:14px">The following appointment has been <strong>cancelled by admin</strong> and removed from your schedule:</p>
+                ${cancelHtmlTable}
+                <p style="font-size:12px;color:#aaa;background:#f9fafb;padding:10px;border-radius:8px">Your calendar has been updated automatically.</p>
+                <p style="font-size:11px;color:#bbb;margin-top:24px;text-align:center">Lough Skin · Automated cancellation notification</p>
+              </div>
+            </div>`,
+        }).catch(e => console.error('[adminCancel email → staff] Failed:', e.message));
+      }
+
+      console.log('[adminCancelBooking Emails] Sent to customer and staff');
+    } catch (emailErr) {
+      console.error('[adminCancelBooking Email Block] Failed:', emailErr.message);
     }
 
     let message = 'Booking cancelled';
