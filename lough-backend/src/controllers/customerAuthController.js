@@ -24,7 +24,7 @@ export const registerCustomer = async (req, res) => {
         }
 
         const token = crypto.randomBytes(32).toString('hex');
-        const expires = Date.now() + 60 * 60 * 1000; // 1 hour
+        const expires = Date.now() + 5 * 60 * 1000;
 
         const newUser = new User({
             firstName, lastName, email, phone, gender,
@@ -54,7 +54,7 @@ export const registerCustomer = async (req, res) => {
       </a>
     </div>
     <p style="color:#666;font-size:14px;background:#fff3cd;padding:10px;border-radius:6px;text-align:center;">
-      <strong>Note:</strong> This link expires in <strong>1 hour</strong>.
+      <strong>Note:</strong> This link expires in <strong>5mins</strong>.
     </p>
   </div>
   <p style="color:#999;font-size:12px;margin-top:25px;text-align:center;">
