@@ -4,8 +4,7 @@ import Staff from '../models/staff.js';
 import Googlebooking from '../models/googlebooking.js';
 import config from '../config/index.js';
 
-// ─── Timezone ─────────────────────────────────────────────────────────────────
-// Timezone is configured via APP_TIMEZONE in .env (see src/utils/timezone.js)
+
 import { TZ, todayBounds as colomboTodayBounds, tzDayStart } from '../utils/timezone.js';
 
 const createOAuthClient = () =>
@@ -63,7 +62,7 @@ const refreshAllTokens = async () => {
 
 
 const syncAndCleanBookings = async () => {
-  // ✅ FIX: use Colombo-aware today boundaries (not server UTC midnight)
+ 
   const { start: todayStart, dateStr: todayStr } = colomboTodayBounds();
   console.log(`[Sync] Colombo today: ${todayStr} | UTC boundary: ${todayStart.toISOString()}`);
 
@@ -98,7 +97,7 @@ const syncAndCleanBookings = async () => {
           });
 
           const googleEvents = eventsResponse.data.items || [];
-          console.log(googleEvents);
+          
 
           for (const event of googleEvents) {
             try {
@@ -110,10 +109,7 @@ const syncAndCleanBookings = async () => {
               const endDate   = new Date(endRaw);
               if (startDate < todayStart) continue;
 
-              // Use the event's own timezone (from Google) to extract date & time correctly.
-              // This is timezone-independent — works regardless of APP_TIMEZONE or server TZ.
-              // e.g. A Sri Lanka user books 9:00 AM IST → Google stores as 03:30 UTC
-              //      We read timeZone: "Asia/Colombo" from the event itself → extract "09:00" correctly
+             
               const eventTZ = event.start?.timeZone || event.end?.timeZone || TZ;
 
               const dateOnlyStr = startDate.toLocaleDateString('en-CA', { timeZone: eventTZ }); // "YYYY-MM-DD"
