@@ -4,6 +4,7 @@ import Staff   from '../models/staff.js';
 import Booking from '../models/bookingModel.js';
 import { sendMail }           from '../utils/mailer.js';                  // ✅ Singleton
 import { leaveStatusTemplate } from '../utils/leaveEmailTemplates.js';    // ✅ Template
+import { writeAuditLog }      from '../utils/auditLogger.js';
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 const toMins = (t) => {
@@ -99,6 +100,17 @@ export const applyLeave = async (req, res) => {
         const populated = await Leave.findById(leave._id).populate({
             path: 'staffId',
             populate: { path: 'userId', select: 'firstName lastName email profileImage' },
+        });
+
+        const staffUser = populated.staffId?.userId;
+        await writeAuditLog({
+            user: req.user,
+            entity: 'leave',
+            entityId: leave._id,
+            action: 'leave.applied',
+            description: `Leave applied by ${staffUser?.firstName || ''} ${staffUser?.lastName || ''}: ${type} from ${startDate} to ${endDate || startDate}${isHourly ? ` (${startTime}–${endTime})` : ''}`,
+            after: { type, startDate, endDate, isHourly, startTime, endTime, reason },
+            req,
         });
 
         res.status(201).json({ message: 'Leave request submitted!', leave: populated });
@@ -312,6 +324,18 @@ export const reviewLeave = async (req, res) => {
         } catch (e) {
             console.error('Email error:', e.message);
         }
+
+        await writeAuditLog({
+            user: req.user,
+            entity: 'leave',
+            entityId: leave._id,
+            action: `leave.${status}`,
+            description: `Leave ${status} for ${firstName} ${lastName} (${leave.type}, ${new Date(leave.startDate).toLocaleDateString()})${adminNote ? ` — Note: ${adminNote}` : ''}`,
+            before: { status: previousStatus },
+            after:  { status, adminNote },
+            meta:   { staffName: `${firstName} ${lastName}`, leaveType: leave.type },
+            req,
+        });
 
         res.status(200).json({ message: `Leave ${status}`, leave });
     } catch (err) {

@@ -11,6 +11,7 @@ import {
     staffInviteTemplate,
     emailChangeVerificationTemplate,
 } from '../utils/adminEmailTemplates.js';                                            // ✅ Templates
+import { writeAuditLog } from '../utils/auditLogger.js';
 
 // ─── Helper: generate token + expiry ─────────────────────────────────────────
 const generateToken = (expiresInMs = 5 * 60 * 1000) => ({
@@ -79,6 +80,16 @@ export const createStaff = async (req, res) => {
             .populate('userId', 'firstName lastName email phone gender role isActive lastLogin')
             .populate('skills', 'name price duration');
 
+        await writeAuditLog({
+            user: req.user,
+            entity: 'staff',
+            entityId: newStaff._id,
+            action: 'staff.created',
+            description: `Created new staff member: ${firstName} ${lastName} (${email})`,
+            after: { firstName, lastName, email, phone, gender, genderRestriction },
+            req,
+        });
+
         res.status(201).json({ message: 'Staff created & invite sent!', staff: populated });
     } catch (err) {
         res.status(400).json({ message: 'Error creating staff', error: err.message });
@@ -101,6 +112,19 @@ export const updateStaff = async (req, res) => {
 
         const user = await User.findById(staff.userId._id);
         if (!user) return res.status(404).json({ message: 'User not found' });
+
+        // ── Snapshot before changes ───────────────────────────────────────────
+        const beforeSnapshot = {
+            firstName:         user.firstName,
+            lastName:          user.lastName,
+            email:             user.email,
+            phone:             user.phone,
+            gender:            user.gender,
+            genderRestriction: staff.genderRestriction,
+            bio:               staff.bio,
+            specializations:   staff.specializations,
+            isOnLeave:         staff.isOnLeave,
+        };
 
         let emailChangeInitiated = false;
 
@@ -153,6 +177,33 @@ export const updateStaff = async (req, res) => {
             .populate('userId', 'firstName lastName email phone gender role isActive lastLogin')
             .populate('skills', 'name price duration');
 
+        // ── Audit log ─────────────────────────────────────────────────────────
+        const updatedUser = updated.userId;
+        const afterSnapshot = {
+            firstName:         updatedUser?.firstName,
+            lastName:          updatedUser?.lastName,
+            email:             emailChangeInitiated ? email : updatedUser?.email,
+            phone:             updatedUser?.phone,
+            gender:            updatedUser?.gender,
+            genderRestriction: updated.genderRestriction,
+            bio:               updated.bio,
+            specializations:   updated.specializations,
+            isOnLeave:         updated.isOnLeave,
+        };
+
+        await writeAuditLog({
+            user: req.user,
+            entity: 'staff',
+            entityId: id,
+            action: emailChangeInitiated ? 'staff.email_change_initiated' : 'staff.updated',
+            description: emailChangeInitiated
+                ? `Staff email change initiated for ${updatedUser?.firstName} ${updatedUser?.lastName} → new email: ${email}`
+                : `Updated staff profile: ${updatedUser?.firstName} ${updatedUser?.lastName} (${updatedUser?.email})`,
+            before: beforeSnapshot,
+            after:  afterSnapshot,
+            req,
+        });
+
         res.status(200).json({
             ...updated.toObject(),
             emailChangeInitiated,
@@ -183,6 +234,17 @@ export const toggleStaffActive = async (req, res) => {
         const updated = await Staff.findById(id)
             .populate('userId', 'firstName lastName email phone gender role isActive lastLogin profileImage')
             .populate('skills', 'name price duration');
+
+        await writeAuditLog({
+            user: req.user,
+            entity: 'staff',
+            entityId: id,
+            action: user.isActive ? 'staff.activated' : 'staff.deactivated',
+            description: `${user.isActive ? 'Activated' : 'Deactivated'} staff: ${user.firstName} ${user.lastName}`,
+            before: { isActive: !user.isActive },
+            after:  { isActive: user.isActive },
+            req,
+        });
 
         res.status(200).json(updated);
     } catch (err) {
@@ -217,6 +279,13 @@ export const resendInvite = async (req, res) => {
             const link = `${config.clientUrl}/verify-email-change?token=${token}&email=${encodeURIComponent(staff.pendingEmail)}`;
             await sendMail(staff.pendingEmail, emailChangeVerificationTemplate(user.firstName, link)); // ✅ Clean
 
+            await writeAuditLog({
+                user: req.user, entity: 'staff', entityId: id,
+                action: 'staff.resend_email_change',
+                description: `Resent email-change verification to ${staff.pendingEmail} for ${user.firstName} ${user.lastName}`,
+                req,
+            });
+
             return res.status(200).json({ message: 'Email change verification link resent!' });
         }
 
@@ -227,6 +296,13 @@ export const resendInvite = async (req, res) => {
 
         const link = `${config.clientUrl}/setup-password?token=${token}&email=${user.email}`;
         await sendMail(user.email, staffInviteTemplate(link));                       // ✅ Clean
+
+        await writeAuditLog({
+            user: req.user, entity: 'staff', entityId: id,
+            action: 'staff.resend_invite',
+            description: `Resent setup invite to ${user.email} for ${user.firstName} ${user.lastName}`,
+            req,
+        });
 
         res.status(200).json({ message: 'Setup invite resent!' });
     } catch (err) {
@@ -240,7 +316,7 @@ export const deleteStaff = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const staff = await Staff.findById(id);
+        const staff = await Staff.findById(id).populate('userId', 'firstName lastName email');
         if (!staff) return res.status(404).json({ message: 'Staff not found' });
 
         const activeBookings = await Booking.findOne({
@@ -251,9 +327,22 @@ export const deleteStaff = async (req, res) => {
             return res.status(400).json({ message: 'Cannot delete staff: This staff member has active bookings.' });
         }
 
+        const staffName  = staff.userId ? `${staff.userId.firstName} ${staff.userId.lastName}` : 'Unknown';
+        const staffEmail = staff.userId?.email || '';
+
         await User.findByIdAndDelete(staff.userId);
         await Staff.findByIdAndDelete(id);
         await Leave.deleteMany({ staffId: id });
+
+        await writeAuditLog({
+            user: req.user,
+            entity: 'staff',
+            entityId: id,
+            action: 'staff.deleted',
+            description: `Deleted staff member: ${staffName} (${staffEmail})`,
+            before: { name: staffName, email: staffEmail },
+            req,
+        });
 
         res.status(200).json({ message: 'Staff and user account deleted successfully' });
     } catch (err) {

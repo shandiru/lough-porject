@@ -26,6 +26,7 @@ import {
 } from '../utils/bookingControllerTemplates.js';                          // ✅ Templates
 
 import { TZ, tzDayStart, tzDayEnd, dayName as tzDayName } from '../utils/timezone.js';
+import { writeAuditLog } from '../utils/auditLogger.js';
 
 export const toMins   = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
 export const fromMins = (m) => `${Math.floor(m / 60).toString().padStart(2, '0')}:${(m % 60).toString().padStart(2, '0')}`;
@@ -395,6 +396,16 @@ export const createBooking = async (req, res) => {
             console.error('[createBooking Email] Failed:', emailErr.message);
         }
 
+        await writeAuditLog({
+            user: req.user,
+            entity: 'booking',
+            entityId: booking._id,
+            action: 'booking.created',
+            description: `Admin created booking ${booking.bookingNumber} for ${customerName} — ${service?.name || ''} on ${bookingDate} at ${bookingTime}`,
+            after: { bookingNumber: booking.bookingNumber, customerName, customerEmail, bookingDate, bookingTime, service: serviceId, staffMember: staffId },
+            req,
+        });
+
         res.status(201).json(populated);
     } catch (err) {
         console.error('[createBooking]', err);
@@ -602,6 +613,16 @@ export const updateBookingStatus = async (req, res) => {
             }
         }
 
+        await writeAuditLog({
+            user: req.user,
+            entity: 'booking',
+            entityId: booking._id,
+            action: `booking.status_updated`,
+            description: `Booking ${booking.bookingNumber} status updated to "${status}"${internalNotes ? ` — Note: ${internalNotes}` : ''}`,
+            after: { status, internalNotes },
+            req,
+        });
+
         res.status(200).json(booking);
     } catch (err) {
         res.status(500).json({ message: err.message });
@@ -684,6 +705,18 @@ export const adminCancelBooking = async (req, res) => {
         } catch (emailErr) {
             console.error('[adminCancelBooking Email] Failed:', emailErr.message);
         }
+
+        await writeAuditLog({
+            user: req.user,
+            entity: 'booking',
+            entityId: booking._id,
+            action: 'booking.admin_cancelled',
+            description: `Admin cancelled booking ${booking.bookingNumber} for ${booking.customerName}${reason ? ` — Reason: ${reason}` : ''}${stripeRefunded ? ` — Refunded £${(refundAmount / 100).toFixed(2)}` : ''}`,
+            before: { status: 'active' },
+            after:  { status: 'cancelled', refundAmount, reason },
+            meta:   { stripeRefunded, refundAmount },
+            req,
+        });
 
         let message = 'Booking cancelled';
         if (stripeRefunded) message = `Booking cancelled and £${(refundAmount / 100).toFixed(2)} refunded`;

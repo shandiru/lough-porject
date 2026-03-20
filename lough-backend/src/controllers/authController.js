@@ -8,6 +8,7 @@ import config from '../config/index.js';
 import { generateAccessToken, generateRefreshToken } from '../utils/tokenUtils.js';
 import { sendMail } from '../utils/mailer.js';
 import { inviteUserTemplate, adminResetPasswordTemplate } from '../utils/adminEmailTemplates.js';
+import { writeAuditLog } from '../utils/auditLogger.js';
 
 // ─── Helper: generate token + expiry ─────────────────────────────────────────
 const generateVerifyToken = () => ({
@@ -44,6 +45,16 @@ export const inviteUser = async (req, res) => {
 
         const link = `${config.clientUrl}/setup-password?token=${token}&email=${email}`;
         await sendMail(email, inviteUserTemplate(firstName, role, link));
+
+        await writeAuditLog({
+            user: req.user || null,
+            entity: 'auth',
+            entityId: newUser._id,
+            action: 'auth.user_invited',
+            description: `Invited ${role} user: ${firstName} ${lastName} (${email})`,
+            meta: { email, role },
+            req,
+        });
 
         res.status(200).json({ message: 'Invite link sent!' });
     } catch (err) {
@@ -142,6 +153,16 @@ export const loginUser = async (req, res) => {
 
         user.lastLogin = Date.now();
         await user.save();
+
+        await writeAuditLog({
+            user: { id: user._id, name: `${user.firstName} ${user.lastName}`, role: user.role },
+            entity: 'auth',
+            entityId: user._id,
+            action: 'auth.login',
+            description: `${user.role} logged in: ${user.email}`,
+            meta: { email: user.email },
+            req,
+        });
 
         res.status(200).json({
             accessToken,

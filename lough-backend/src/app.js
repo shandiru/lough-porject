@@ -13,6 +13,7 @@ import leaveRouter    from './routes/leaveRoutes.js';
 import bookingRouter  from './routes/bookingRoutes.js';
 import profileRouter  from './routes/profileRoutes.js';
 import paymentRouter  from './routes/paymentRoutes.js';
+import auditLogRouter from './routes/auditLogRoutes.js';
 import { stripeWebhook } from './controllers/paymentController.js';
 import config from './config/index.js';
 import { startGoogleCalendarCrons} from "../src/cronJobs/googleCalendarCronjobs.js"
@@ -48,6 +49,7 @@ app.use('/api/profile',       profileRouter);
 app.use('/api/bookings',      bookingRouter);
 app.use('/api/payments',      paymentRouter);
 app.use('/api/customer/auth', customerAuthRouter);
+app.use('/api/audit-logs',    auditLogRouter);
 
 app.get('/', (req, res) => res.json({ message: 'Lough Skin API running phase 3 start' }));
 
