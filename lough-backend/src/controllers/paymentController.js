@@ -10,18 +10,16 @@ import config       from '../config/index.js';
 import { addToGoogleCalendar, fromMins, toMins, colomboDayStart } from './bookingController.js';
 import { TZ } from '../utils/timezone.js';
 
-// ─── Timezone ─────────────────────────────────────────────────────────────────
-// Timezone is configured via APP_TIMEZONE in .env (see src/utils/timezone.js)
+
 
 const stripe = new Stripe(config.stripe.secretKey);
 
-// ─── Mailer ───────────────────────────────────────────────────────────────────
+
 const mailer = () => nodemailer.createTransport({
   service: 'gmail',
   auth: { user: config.email.user, pass: config.email.pass },
 });
 
-// ─── HTML building blocks ─────────────────────────────────────────────────────
 const row = (label, value, bg = '#ffffff') =>
   value
     ? `<tr style="background:${bg}">
@@ -305,7 +303,7 @@ const createBookingFromSession = async (session) => {
 
   const staff = await Staff.findById(m.staffId).populate('userId', 'firstName lastName email');
 
-  // ✅ FIX: gcalEventId save பண்ணணும் — இல்லன்னா cancel-ல delete பண்ண முடியாது
+ 
   if (staff) {
     const gcalEventId = await addToGoogleCalendar(staff, booking, service).catch(() => null);
     if (gcalEventId) {
@@ -415,13 +413,13 @@ export const createCheckoutSession = async (req, res) => {
       expires_at:  Math.floor(Date.now() / 1000) + 1800,
     });
 
-    // ✅ FIX: duration சேர்த்து lock create — correct slot blocking-க்கு அவசியம்
+  
     await TempSlotLock.create({
       staffId,
       serviceId,
       bookingDate,
       bookingTime,
-      duration:  service.duration, // ✅ FIX
+      duration:  service.duration, 
       sessionId: session.id,
       expiresAt: new Date(Date.now() + 30 * 60 * 1000),
     });

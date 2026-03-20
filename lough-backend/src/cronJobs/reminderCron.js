@@ -8,14 +8,14 @@ import config      from '../config/index.js';
 import { TZ }      from '../utils/timezone.js';
 import { fromMins, toMins } from '../controllers/bookingController.js';
 import moment from 'moment-timezone';
-// ─── Mailer ───────────────────────────────────────────────────────────────────
+
 const mailer = () =>
   nodemailer.createTransport({
     service: 'gmail',
     auth: { user: config.email.user, pass: config.email.pass },
   });
 
-// ─── HTML helpers (match existing paymentController style) ───────────────────
+
 const row = (label, value, bg = '#ffffff') =>
   value
     ? `<tr style="background:${bg}">
@@ -41,14 +41,13 @@ const wrap = (headerHtml, bodyHtml) => `
     <p style="text-align:center;font-size:11px;color:#bbb;margin-top:20px">Lough Skin · Automated reminder</p>
   </div>`;
 
-// ─── Format date in configured timezone ──────────────────────────────────────
 const formatDateTZ = (dateVal) =>
   new Date(dateVal).toLocaleDateString('en-GB', {
     timeZone: TZ,
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   });
 
-// ─── Send reminder to customer ────────────────────────────────────────────────
+
 const sendCustomerReminder = async (booking, service) => {
   try {
     const endTime = fromMins(toMins(booking.bookingTime) + service.duration);
@@ -90,7 +89,7 @@ const sendCustomerReminder = async (booking, service) => {
   }
 };
 
-// ─── Send reminder to staff ───────────────────────────────────────────────────
+
 const sendStaffReminder = async (booking, service, staffUser) => {
   try {
     if (!staffUser?.email) {
@@ -144,10 +143,10 @@ const sendStaffReminder = async (booking, service, staffUser) => {
   }
 };
 
-// ─── Core reminder logic ──────────────────────────────────────────────────────
+
 const sendReminders = async () => {
   try {
-    // Correct Tomorrow Range using Project Timezone
+  
     const tomorrowStart = moment().tz(TZ).add(1, 'days').startOf('day').toDate();
     const tomorrowEnd   = moment().tz(TZ).add(1, 'days').endOf('day').toDate();
 

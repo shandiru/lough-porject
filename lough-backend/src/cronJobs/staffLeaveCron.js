@@ -3,12 +3,10 @@ import Staff from '../models/staff.js';
 import Leave from '../models/leave.js';
 import { todayBounds } from '../utils/timezone.js';
 
-// ─── Timezone ─────────────────────────────────────────────────────────────────
-// Timezone is configured via APP_TIMEZONE in .env (see src/utils/timezone.js)
+
 
 const updateStaffLeaveStatus = async () => {
-  // Build today's range in configured timezone (not server UTC).
-  // Change APP_TIMEZONE in .env to switch timezone without touching code.
+
   const { start: todayStart, end: todayEnd, dateStr: todayStr } = todayBounds();
 
   console.log(`[Leave Cron] Today (${process.env.APP_TIMEZONE || 'Europe/London'}): ${todayStr} | UTC range: ${todayStart.toISOString()} → ${todayEnd.toISOString()}`);

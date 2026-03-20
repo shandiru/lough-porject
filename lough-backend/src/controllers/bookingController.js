@@ -9,25 +9,20 @@ import Googlebooking from '../models/googlebooking.js';
 import TempSlotLock  from '../models/tempSlotLock.js';
 import { google }    from 'googleapis';
 
-// ─── Timezone ─────────────────────────────────────────────────────────────────
-// Timezone is now configured via APP_TIMEZONE in .env (see src/utils/timezone.js)
+
 import { TZ, tzDayStart, tzDayEnd, dayName as tzDayName, formatDate as tzFormatDate } from '../utils/timezone.js';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 export const toMins   = (t) => { const [h,m] = t.split(':').map(Number); return h*60+m; };
 export const fromMins = (m) => `${Math.floor(m/60).toString().padStart(2,'0')}:${(m%60).toString().padStart(2,'0')}`;
 
-/**
- * Build a Date representing midnight (00:00:00.000) at the START of a given
- * "YYYY-MM-DD" string in the configured timezone.
- * Stored as UTC in MongoDB — day-boundary queries are correct.
- */
+
 export const colomboDayStart = (dateStr) => tzDayStart(dateStr);
 export const colomboDayEnd   = (dateStr) => tzDayEnd(dateStr);
 
-const BUFFER = 15; // minutes buffer AFTER a booking ends before next can start
+const BUFFER = 15;
 
-// ─── Google Calendar helper ───────────────────────────────────────────────────
+
 export const addToGoogleCalendar = async (staff, booking, service) => {
   try {
     if (
@@ -49,7 +44,7 @@ export const addToGoogleCalendar = async (staff, booking, service) => {
 
     const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
-    // bookingDate is stored as UTC in Mongo — render it in Colombo TZ for the date string
+    
     const dateStr  = new Date(booking.bookingDate).toLocaleDateString('en-CA', { timeZone: TZ });
     const startStr = `${dateStr}T${booking.bookingTime}:00`;
     const endStr   = `${dateStr}T${fromMins(toMins(booking.bookingTime) + service.duration)}:00`;
@@ -65,7 +60,7 @@ export const addToGoogleCalendar = async (staff, booking, service) => {
           `Email: ${booking.customerEmail}`,
           booking.customerNotes ? `Notes: ${booking.customerNotes}` : '',
         ].filter(Boolean).join('\n'),
-        // timeZone uses TZ from .env (APP_TIMEZONE)
+        
         start: { dateTime: startStr, timeZone: TZ },
         end:   { dateTime: endStr,   timeZone: TZ },
         colorId: '2',
@@ -78,12 +73,7 @@ export const addToGoogleCalendar = async (staff, booking, service) => {
   }
 };
 
-// ─── deleteFromGoogleCalendar helper ─────────────────────────────────────────
-/**
- * Deletes a Google Calendar event for a staff member.
- * Called when a booking is cancelled (any flow).
- * Non-fatal — errors are logged but never bubble up.
- */
+
 export const deleteFromGoogleCalendar = async (staff, googleCalendarEventId) => {
   try {
     if (!googleCalendarEventId) {
@@ -126,12 +116,7 @@ export const deleteFromGoogleCalendar = async (staff, googleCalendarEventId) => 
   }
 };
 
-// ─── isSlotFreeSync ───────────────────────────────────────────────────────────
-/**
- * Buffer rule: next booking can start only AFTER (prevEnd + BUFFER).
- * Example: 9:00–9:30 booked (30min) → 9:30 + 15min buffer = 9:45 earliest next slot.
- * Buffer applies AFTER end only — NOT before booking starts.
- */
+
 const isSlotFreeSync = (startMins, endMins, {
   daySchedule,
   approvedLeaves,
@@ -160,7 +145,7 @@ const isSlotFreeSync = (startMins, endMins, {
   }
 
   // 4. Existing bookings + post-end buffer
-  // ✅ FIX: endMins > bS (not bS - BUFFER — no pre-booking buffer)
+ 
   for (const bk of existingBookings) {
     const bS = toMins(bk.bookingTime);
     const bE = bS + bk.duration;
@@ -168,14 +153,14 @@ const isSlotFreeSync = (startMins, endMins, {
   }
 
   // 5. Google Calendar bookings + post-end buffer
-  // ✅ FIX: endMins > gbS (not gbS - BUFFER)
+  
   for (const gb of googleBookings) {
     const gbS = toMins(gb.startTime), gbE = toMins(gb.endTime);
     if (startMins < gbE + BUFFER && endMins > gbS) return false;
   }
 
   // 6. TempSlotLocks + post-end buffer
-  // ✅ FIX: use lock.duration for real end time; no pre-lock buffer
+  
   const dateStr = typeof bookingDate === 'string'
     ? bookingDate
     : new Date(bookingDate).toLocaleDateString('en-CA', { timeZone: TZ });
@@ -752,7 +737,7 @@ export const updateBookingStatus = async (req, res) => {
 
     await booking.save();
 
-    // ── status 'cancelled' ஆனா Google Calendar event delete பண்ணு ──────────
+   
     if (status === 'cancelled' && booking.googleCalendarEventId) {
       const staff = await Staff.findById(booking.staffMember._id || booking.staffMember).catch(() => null);
       if (staff) await deleteFromGoogleCalendar(staff, booking.googleCalendarEventId);
@@ -1004,7 +989,7 @@ export const getCalendarBookings = async (req, res) => {
     const { startDate, endDate, staffId } = req.query;
     if (!startDate || !endDate) return res.status(400).json({ message: 'startDate and endDate required' });
 
-    // ✅ FIX: boundaries in Colombo time
+  
     const query = {
       bookingDate: { $gte: colomboDayStart(startDate), $lte: colomboDayEnd(endDate) },
       status: { $nin: ['cancelled'] },
@@ -1024,20 +1009,14 @@ export const getCalendarBookings = async (req, res) => {
   }
 };
 
-// ─── GET /api/bookings/staff/my (staff — their own bookings) ─────────────────
-/**
- * Staff member-ஓட own bookings fetch பண்ணும்.
- * req.user.id = User._id (JWT-ல இருக்கு)
- * Booking.staffMember = Staff._id  ← இரண்டும் different!
- * Fix: User._id → Staff._id → Bookings
- */
+
 export const getStaffBookings = async (req, res) => {
   try {
-    // Step 1: User._id → Staff record find பண்ணு
+  
     const staff = await Staff.findOne({ userId: req.user.id });
     if (!staff) return res.status(404).json({ message: 'Staff profile not found' });
 
-    // Step 2: Staff._id-ல bookings fetch பண்ணு
+   
     const bookings = await Booking.find({ staffMember: staff._id })
       .populate('service', 'name price duration color')
       .populate({ path: 'staffMember', populate: { path: 'userId', select: 'firstName lastName profileImage' } })
@@ -1049,14 +1028,7 @@ export const getStaffBookings = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
-// ─── POST /api/bookings/:id/reschedule-request (customer) ────────────────────
-/**
- * Customer requests a reschedule.
- * Rules:
- *  - Booking must be pending/confirmed
- *  - Appointment must be MORE than 48 hours away
- *  - Only one pending reschedule at a time
- */
+
 export const requestReschedule = async (req, res) => {
   try {
     const { newDate, newTime, newStaffId, reason } = req.body;
@@ -1112,14 +1084,7 @@ export const requestReschedule = async (req, res) => {
   }
 };
 
-// ─── POST /api/bookings/:id/reschedule-review (admin) ────────────────────────
-/**
- * Admin reviews a pending reschedule request.
- * action: 'approve' | 'reject' | 'cancel'
- * - approve: update date/time/staff, swap Google Calendar events, reset consultation form
- * - reject:  keep original booking unchanged
- * - cancel:  cancel booking entirely (with optional refund)
- */
+
 export const reviewReschedule = async (req, res) => {
   try {
     const {
