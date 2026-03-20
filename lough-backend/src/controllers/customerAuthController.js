@@ -218,7 +218,7 @@ export const forgotPassword = async (req, res) => {
 
         const token = crypto.randomBytes(32).toString('hex');
         user.emailVerifyToken = token;
-        user.emailVerifyTokenExpire = Date.now() + 15 * 60 * 1000;
+        user.emailVerifyTokenExpire = Date.now() + 5 * 60 * 1000;
         await user.save();
 
         const link = `${config.userlUrl}/reset-password?token=${token}&email=${email}`;
@@ -237,7 +237,7 @@ export const forgotPassword = async (req, res) => {
         Reset My Password
       </a>
     </div>
-    <p style="color:#666;font-size:14px;background:#fff3cd;padding:10px;border-radius:6px;text-align:center;"><strong>Expires in 15 mins.</strong></p>
+    <p style="color:#666;font-size:14px;background:#fff3cd;padding:10px;border-radius:6px;text-align:center;"><strong>Expires in 5 mins.</strong></p>
     <p style="color:#777;font-size:13px;">If you didn't request this, ignore this email.</p>
   </div>
   <p style="color:#999;font-size:12px;margin-top:25px;text-align:center;">&copy; 2026 Lough Skin.</p>
