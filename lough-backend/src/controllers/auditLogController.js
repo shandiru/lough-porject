@@ -1,4 +1,5 @@
 import AuditLog from '../models/auditLog.js';
+import { tzDayStart, tzDayEnd } from '../utils/timezone.js';
 
 // GET /api/audit-logs
 export const getAuditLogs = async (req, res) => {
@@ -22,10 +23,12 @@ export const getAuditLogs = async (req, res) => {
     if (entityId)    filter.entityId    = entityId;
     if (performedBy) filter.performedBy = performedBy;
 
+    // Use tzDayStart / tzDayEnd so date boundaries respect APP_TIMEZONE (.env)
+    // instead of the server's local timezone or raw UTC.
     if (from || to) {
       filter.createdAt = {};
-      if (from) filter.createdAt.$gte = new Date(from);
-      if (to)   filter.createdAt.$lte = new Date(new Date(to).setHours(23, 59, 59, 999));
+      if (from) filter.createdAt.$gte = tzDayStart(from);
+      if (to)   filter.createdAt.$lte = tzDayEnd(to);
     }
 
     if (search) {
