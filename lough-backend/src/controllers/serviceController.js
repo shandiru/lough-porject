@@ -1,5 +1,6 @@
 import Service from "../models/service.js";
 import Category from "../models/category.js";
+import Booking from "../models/bookingModel.js";
 import { writeAuditLog } from "../utils/auditLogger.js";
 export const getServices = async (req, res) => {
   try {
@@ -91,6 +92,20 @@ export const updateService = async (req, res) => {
 export const deleteService = async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Check if any active bookings exist for this service
+    const activeBookingCount = await Booking.countDocuments({
+      service: id,
+      status: { $in: ["pending", "confirmed"] },
+    });
+
+    if (activeBookingCount > 0) {
+      return res.status(400).json({
+        message: `Cannot delete service. There ${activeBookingCount === 1 ? "is" : "are"} ${activeBookingCount} active booking${activeBookingCount === 1 ? "" : "s"} linked to this service. Please cancel or complete them first.`,
+        activeBookings: activeBookingCount,
+      });
+    }
+
     const deletedService = await Service.findByIdAndDelete(id);
 
     if (!deletedService) {
