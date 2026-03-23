@@ -258,10 +258,12 @@ export const getAvailableSlots = async (req, res) => {
             if (availableSlots.length > 0) {
                 result.push({
                     staff: {
-                        _id:          staff._id,
-                        name:         `${u.firstName} ${u.lastName}`,
-                        gender:       u.gender,
-                        profileImage: u.profileImage || null,
+                        _id:             staff._id,
+                        name:            `${u.firstName} ${u.lastName}`,
+                        gender:          u.gender,
+                        profileImage:    u.profileImage || null,
+                        specializations: staff.specializations || [],
+                        bio:             staff.bio || '',
                     },
                     availableSlots,
                 });
