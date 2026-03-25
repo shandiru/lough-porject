@@ -76,7 +76,7 @@ const bookingSchema = new mongoose.Schema(
     },
 
     stripePaymentIntentId: { type: String },
-    stripeChargeId:        { type: String },
+   
 
     // Consent
     consentFormCompleted: { type: Boolean, required: true, default: false },

@@ -57,7 +57,7 @@ const ServiceSchema = new mongoose.Schema(
 
 ServiceSchema.index({ category: 1 });
 ServiceSchema.index({ isActive: 1 });
-ServiceSchema.index({ eligibleStaff: 1 }); 
+
 
 
 
