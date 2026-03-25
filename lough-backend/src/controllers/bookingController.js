@@ -595,25 +595,6 @@ export const updateBookingStatus = async (req, res) => {
             if (staff) await deleteFromGoogleCalendar(staff, booking.googleCalendarEventId);
         }
 
-        // ── Emails for cancellation ───────────────────────────────────────────
-        if (status === 'cancelled') {
-            try {
-                const staffFullDoc    = await Staff.findById(booking.staffMember?._id ?? booking.staffMember).populate('userId', 'firstName lastName email').catch(() => null);
-                const staffName       = staffFullDoc?.userId ? `${staffFullDoc.userId.firstName} ${staffFullDoc.userId.lastName}` : 'Staff';
-                const staffEmailFinal = staffFullDoc?.userId?.email || null;
-                const formattedDate   = formatDate(booking.bookingDate);
-
-                await Promise.all([
-                    sendMail(booking.customerEmail, adminCancelCustomerTemplate(booking, formattedDate, '', 0, false)),
-                    staffEmailFinal
-                        ? sendMail(staffEmailFinal, adminCancelStaffTemplate(booking, staffName, formattedDate, '', false))
-                        : Promise.resolve(),
-                ]);
-                console.log('[updateBookingStatus cancel Emails] Sent');
-            } catch (emailErr) {
-                console.error('[updateBookingStatus Email] Failed:', emailErr.message);
-            }
-        }
 
         await writeAuditLog({
             user: req.user,
