@@ -7,7 +7,7 @@ import {
   deleteLeave,
   getAllLeaves,
   reviewLeave,
-  deleteAllLeaves,
+  
 } from '../controllers/leaveController.js';
 import { verifyToken, verifyAdmin, verifyStaff } from '../middleware/verifyToken.js';
 
@@ -24,7 +24,6 @@ leaveRouter.delete('/:id',       verifyToken, verifyStaff, deleteLeave);  // ✨
 leaveRouter.get('/',             verifyToken, verifyAdmin, getAllLeaves);  // All leaves
 leaveRouter.patch('/:id/review', verifyToken, verifyAdmin, reviewLeave);  // ✨ Review + Toggle
 
-// ── Dev util ───────────────────────────────────────────────────────────────
-leaveRouter.get('/delete', deleteAllLeaves);
+
 
 export default leaveRouter;

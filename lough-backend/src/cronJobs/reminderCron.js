@@ -1,20 +1,16 @@
-import cron        from 'node-cron';
-import nodemailer  from 'nodemailer';
-import Booking     from '../models/bookingModel.js';
-import Service     from '../models/service.js';
-import Staff       from '../models/staff.js';
-import User        from '../models/user.js';
-import config      from '../config/index.js';
-import { TZ }      from '../utils/timezone.js';
+import cron    from 'node-cron';
+import Booking  from '../models/bookingModel.js';
+import Service  from '../models/service.js';
+import Staff    from '../models/staff.js';
+import User     from '../models/user.js';
+import { sendMail } from '../utils/mailer.js';          
+import config   from '../config/index.js';
+import { TZ }   from '../utils/timezone.js';
 import { fromMins, toMins } from '../controllers/bookingController.js';
-import moment from 'moment-timezone';
+import moment   from 'moment-timezone';
 
-const mailer = () =>
-  nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user: config.email.user, pass: config.email.pass },
-  });
 
+// ─── Email HTML Helpers ───────────────────────────────────────────────────────
 
 const row = (label, value, bg = '#ffffff') =>
   value
@@ -48,15 +44,16 @@ const formatDateTZ = (dateVal) =>
   });
 
 
+// ─── Customer Reminder Email ──────────────────────────────────────────────────
+
 const sendCustomerReminder = async (booking, service) => {
   try {
     const endTime = fromMins(toMins(booking.bookingTime) + service.duration);
     const date    = formatDateTZ(booking.bookingDate);
     const balance = (booking.balanceRemaining / 100).toFixed(2);
 
-    await mailer().sendMail({
-      from:    `"Lough Skin" <${config.email.user}>`,
-      to:      booking.customerEmail,
+    
+    await sendMail(booking.customerEmail, {
       subject: `Reminder: Your appointment tomorrow — ${service.name}`,
       html: wrap(
         `<h1 style="color:#fff;margin:0;font-size:22px;font-weight:700">Appointment Reminder ⏰</h1>
@@ -90,6 +87,8 @@ const sendCustomerReminder = async (booking, service) => {
 };
 
 
+
+
 const sendStaffReminder = async (booking, service, staffUser) => {
   try {
     if (!staffUser?.email) {
@@ -99,9 +98,8 @@ const sendStaffReminder = async (booking, service, staffUser) => {
     const endTime = fromMins(toMins(booking.bookingTime) + service.duration);
     const date    = formatDateTZ(booking.bookingDate);
 
-    await mailer().sendMail({
-      from:    `"Lough Skin" <${config.email.user}>`,
-      to:      staffUser.email,
+  
+    await sendMail(staffUser.email, {
       subject: `Reminder: Appointment tomorrow — ${service.name} with ${booking.customerName}`,
       html: wrap(
         `<h1 style="color:#fff;margin:0;font-size:22px;font-weight:700">Tomorrow's Appointment 📅</h1>
@@ -127,13 +125,6 @@ const sendStaffReminder = async (booking, service, staffUser) => {
            ${booking.customerNotes ? row('Notes', booking.customerNotes, '#f0fafa') : ''}
          `)}
 
-         ${sectionTitle('Payment')}
-         ${tableHtml(`
-           ${row('Total',   '£' + (booking.totalAmount / 100).toFixed(2), '#f0fafa')}
-           ${row('Paid',    '£' + (booking.paidAmount  / 100).toFixed(2))}
-           ${row('Balance', '£' + (booking.balanceRemaining / 100).toFixed(2), '#fff8e1')}
-         `)}
-
          <p style="font-size:13px;color:#555;margin-bottom:0">— <strong>Lough Skin Admin</strong></p>`
       ),
     });
@@ -144,21 +135,19 @@ const sendStaffReminder = async (booking, service, staffUser) => {
 };
 
 
+// ─── Main Reminder Logic ──────────────────────────────────────────────────────
+
 const sendReminders = async () => {
   try {
-  
     const tomorrowStart = moment().tz(TZ).add(1, 'days').startOf('day').toDate();
     const tomorrowEnd   = moment().tz(TZ).add(1, 'days').endOf('day').toDate();
 
     console.log(`[Reminder Cron] Range (${TZ}): ${tomorrowStart.toISOString()} - ${tomorrowEnd.toISOString()}`);
 
     const candidates = await Booking.find({
-      status: { $in: ['confirmed', 'pending'] },
+      status:       { $in: ['confirmed', 'pending'] },
       reminderSent: false,
-      bookingDate: { 
-        $gte: tomorrowStart, 
-        $lte: tomorrowEnd 
-      },
+      bookingDate:  { $gte: tomorrowStart, $lte: tomorrowEnd },
     });
 
     console.log(`[Reminder Cron] Found ${candidates.length} bookings for tomorrow.`);
@@ -176,7 +165,7 @@ const sendReminders = async () => {
           sendStaffReminder(booking, service, staffUser),
         ]);
 
-        booking.reminderSent = true;
+        booking.reminderSent   = true;
         booking.reminderSentAt = new Date();
         await booking.save();
 
@@ -190,15 +179,17 @@ const sendReminders = async () => {
   }
 };
 
+
+// ─── Cron Schedule ────────────────────────────────────────────────────────────
+
 export const startReminderCron = () => {
- 
   cron.schedule('0 0 * * *', () => {
     console.log('[Reminder Cron] Running daily midnight ...');
     sendReminders();
   }, {
     scheduled: true,
-    timezone: TZ 
+    timezone: TZ,
   });
 
-  console.log(`[Reminder Cron] Scheduled — runs daily  (${TZ}).`);
+  console.log(`[Reminder Cron] Scheduled — runs daily (${TZ}).`);
 };

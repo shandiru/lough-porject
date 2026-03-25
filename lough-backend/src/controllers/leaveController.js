@@ -344,11 +344,3 @@ export const reviewLeave = async (req, res) => {
 };
 
 
-// ─── Delete All Leaves (Dev/Admin) ────────────────────────────────────────────
-export const deleteAllLeaves = async (req, res) => {
-    const result = await Leave.deleteMany({});
-    res.status(200).json({
-        message: `Deleted ${result.deletedCount} leave record(s).`,
-        deletedCount: result.deletedCount,
-    });
-};
